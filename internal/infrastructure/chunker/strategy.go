@@ -17,6 +17,7 @@ import (
 // Strategy values for SplitterConfig.Strategy.
 const (
 	StrategyAuto      = "auto"
+	StrategySemantic  = "semantic"
 	StrategyHeading   = "heading"
 	StrategyHeuristic = "heuristic"
 	StrategyRecursive = "recursive"
@@ -201,6 +202,12 @@ func resolveChainWithProfile(text string, cfg SplitterConfig) ([]StrategyTier, *
 		return []StrategyTier{TierHeading, TierLegacy}, nil
 	case StrategyHeuristic:
 		return []StrategyTier{TierHeuristic, TierLegacy}, nil
+	case StrategySemantic:
+		// The semantic tier needs an embedding model and is therefore run
+		// from the knowledge service via SplitSemantic. The pure chunker
+		// entry point falls back to legacy so preview/debug callers that do
+		// not have model access still return a deterministic result.
+		return []StrategyTier{TierLegacy}, nil
 	case StrategyRecursive:
 		// "recursive" is a public-API alias for "legacy": both invoke
 		// SplitText. Kept for backwards compatibility with stored configs.
@@ -271,6 +278,15 @@ func ensureDefaults(cfg SplitterConfig) SplitterConfig {
 	// near-clone of the previous chunk.
 	if cfg.ChunkOverlap > cfg.ChunkSize/2 && cfg.ChunkSize > 0 {
 		cfg.ChunkOverlap = cfg.ChunkSize / 2
+	}
+	if cfg.SemanticBufferSize < 0 {
+		cfg.SemanticBufferSize = 1
+	}
+	if cfg.SemanticBreakpointPercentile <= 0 {
+		cfg.SemanticBreakpointPercentile = 95
+	}
+	if cfg.SemanticBreakpointPercentile > 100 {
+		cfg.SemanticBreakpointPercentile = 100
 	}
 	return cfg
 }

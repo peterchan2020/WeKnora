@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Tencent/WeKnora/internal/application/service/retriever"
 	werrors "github.com/Tencent/WeKnora/internal/errors"
@@ -148,12 +149,14 @@ type ProcessChunksOptions struct {
 // directly with a zero-value config.
 func buildSplitterConfig(kb *types.KnowledgeBase) chunker.SplitterConfig {
 	chunkCfg := chunker.SplitterConfig{
-		ChunkSize:    kb.ChunkingConfig.ChunkSize,
-		ChunkOverlap: kb.ChunkingConfig.ChunkOverlap,
-		Separators:   kb.ChunkingConfig.Separators,
-		Strategy:     kb.ChunkingConfig.Strategy,
-		TokenLimit:   kb.ChunkingConfig.TokenLimit,
-		Languages:    kb.ChunkingConfig.Languages,
+		ChunkSize:                    kb.ChunkingConfig.ChunkSize,
+		ChunkOverlap:                 kb.ChunkingConfig.ChunkOverlap,
+		Separators:                   kb.ChunkingConfig.Separators,
+		Strategy:                     kb.ChunkingConfig.Strategy,
+		TokenLimit:                   kb.ChunkingConfig.TokenLimit,
+		Languages:                    kb.ChunkingConfig.Languages,
+		SemanticBufferSize:           kb.ChunkingConfig.SemanticBufferSize,
+		SemanticBreakpointPercentile: kb.ChunkingConfig.SemanticBreakpointPercentile,
 	}
 	if chunkCfg.ChunkSize <= 0 {
 		chunkCfg.ChunkSize = chunker.DefaultChunkSize
@@ -163,6 +166,12 @@ func buildSplitterConfig(kb *types.KnowledgeBase) chunker.SplitterConfig {
 	}
 	if len(chunkCfg.Separators) == 0 {
 		chunkCfg.Separators = []string{"\n\n", "\n", "。"}
+	}
+	if chunkCfg.SemanticBufferSize == 0 {
+		chunkCfg.SemanticBufferSize = 1
+	}
+	if chunkCfg.SemanticBreakpointPercentile == 0 {
+		chunkCfg.SemanticBreakpointPercentile = 95
 	}
 	return chunkCfg
 }
@@ -179,16 +188,231 @@ func buildParentChildConfigs(cc types.ChunkingConfig, base chunker.SplitterConfi
 		childSize = 384
 	}
 	parent = chunker.SplitterConfig{
-		ChunkSize:    parentSize,
-		ChunkOverlap: base.ChunkOverlap, // reuse configured overlap for parents
-		Separators:   base.Separators,
+		ChunkSize:                    parentSize,
+		ChunkOverlap:                 base.ChunkOverlap, // reuse configured overlap for parents
+		Separators:                   base.Separators,
+		Strategy:                     base.Strategy,
+		TokenLimit:                   base.TokenLimit,
+		Languages:                    base.Languages,
+		SemanticBufferSize:           base.SemanticBufferSize,
+		SemanticBreakpointPercentile: base.SemanticBreakpointPercentile,
 	}
 	child = chunker.SplitterConfig{
-		ChunkSize:    childSize,
-		ChunkOverlap: childSize / 5, // ~20% overlap for child chunks
-		Separators:   base.Separators,
+		ChunkSize:                    childSize,
+		ChunkOverlap:                 childSize / 5, // ~20% overlap for child chunks
+		Separators:                   base.Separators,
+		Strategy:                     base.Strategy,
+		TokenLimit:                   base.TokenLimit,
+		Languages:                    base.Languages,
+		SemanticBufferSize:           base.SemanticBufferSize,
+		SemanticBreakpointPercentile: base.SemanticBreakpointPercentile,
 	}
 	return
+}
+
+func (s *knowledgeService) splitKnowledgeContent(
+	ctx context.Context,
+	kb *types.KnowledgeBase,
+	text string,
+) ([]types.ParsedChunk, []types.ParsedParentChunk) {
+	chunkCfg := buildSplitterConfig(kb)
+	semanticEmbedder := s.semanticChunkingEmbedder(ctx, kb, chunkCfg)
+
+	if kb.ChunkingConfig.EnableParentChild {
+		parentCfg, childCfg := buildParentChildConfigs(kb.ChunkingConfig, chunkCfg)
+		var pcResult chunker.ParentChildResult
+		if isSemanticChunking(chunkCfg) && semanticEmbedder != nil {
+			pcResult = s.splitSemanticParentChild(ctx, text, parentCfg, childCfg, semanticEmbedder)
+		} else {
+			pcResult = chunker.SplitParentChild(text, parentCfg, childCfg)
+		}
+		return parsedChunksFromChildren(pcResult.Children), parsedParentChunksFromChunks(pcResult.Parents)
+	}
+
+	splitChunks := s.splitFlatContent(ctx, text, chunkCfg, semanticEmbedder)
+	return parsedChunksFromChunks(splitChunks), nil
+}
+
+func (s *knowledgeService) semanticChunkingEmbedder(
+	ctx context.Context,
+	kb *types.KnowledgeBase,
+	cfg chunker.SplitterConfig,
+) embedding.Embedder {
+	if !isSemanticChunking(cfg) {
+		return nil
+	}
+	if kb == nil || strings.TrimSpace(kb.EmbeddingModelID) == "" {
+		logger.Warnf(ctx, "Semantic chunking requested but KB has no embedding model; falling back to structural chunking")
+		return nil
+	}
+	embeddingModel, err := s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
+	if err != nil {
+		logger.Warnf(ctx, "Semantic chunking failed to load embedding model %s: %v; falling back to structural chunking", kb.EmbeddingModelID, err)
+		return nil
+	}
+	return embeddingModel
+}
+
+func isSemanticChunking(cfg chunker.SplitterConfig) bool {
+	return strings.EqualFold(strings.TrimSpace(cfg.Strategy), chunker.StrategySemantic)
+}
+
+func (s *knowledgeService) splitFlatContent(
+	ctx context.Context,
+	text string,
+	cfg chunker.SplitterConfig,
+	semanticEmbedder embedding.Embedder,
+) []chunker.Chunk {
+	if isSemanticChunking(cfg) && semanticEmbedder != nil {
+		chunks, err := chunker.SplitSemantic(ctx, text, cfg, semanticEmbedder)
+		if err == nil && len(chunks) > 0 {
+			logger.Infof(ctx, "Semantic chunking produced %d chunks", len(chunks))
+			return chunks
+		}
+		if err != nil {
+			logger.Warnf(ctx, "Semantic chunking failed: %v; falling back to structural chunking", err)
+		}
+	}
+	return chunker.Split(text, cfg)
+}
+
+func (s *knowledgeService) splitSemanticParentChild(
+	ctx context.Context,
+	text string,
+	parentCfg, childCfg chunker.SplitterConfig,
+	semanticEmbedder embedding.Embedder,
+) chunker.ParentChildResult {
+	parentCfg.Strategy = chunker.StrategyAuto
+	parents := chunker.Split(text, parentCfg)
+	if len(parents) == 0 {
+		return chunker.ParentChildResult{}
+	}
+
+	childCfg.Strategy = chunker.StrategySemantic
+	var newParents []chunker.Chunk
+	var children []chunker.ChildChunk
+	childSeq := 0
+	for _, parent := range parents {
+		subs := s.splitFlatContent(ctx, parent.Content, childCfg, semanticEmbedder)
+		parentIndex := -1
+		if len(subs) > 1 || (len(subs) == 1 && subs[0].Content != parent.Content) {
+			parentIndex = len(newParents)
+			newParents = append(newParents, parent)
+		}
+		for _, sub := range subs {
+			sub.Seq = childSeq
+			sub.Start += parent.Start
+			sub.End += parent.Start
+			sub.ContextHeader = mergeContextHeaders(parent.ContextHeader, sub.ContextHeader)
+			children = append(children, chunker.ChildChunk{Chunk: sub, ParentIndex: parentIndex})
+			childSeq++
+		}
+	}
+	return chunker.ParentChildResult{Parents: newParents, Children: children}
+}
+
+func mergeContextHeaders(parent, child string) string {
+	parent = strings.TrimSpace(parent)
+	child = strings.TrimSpace(child)
+	if parent == "" {
+		return child
+	}
+	if child == "" {
+		return parent
+	}
+	parentLines := strings.Split(parent, "\n")
+	childLines := strings.Split(child, "\n")
+	if len(parentLines) > 0 && len(childLines) > 0 &&
+		strings.TrimSpace(parentLines[len(parentLines)-1]) == strings.TrimSpace(childLines[0]) {
+		childLines = childLines[1:]
+	}
+	if len(childLines) == 0 {
+		return parent
+	}
+	return parent + "\n" + strings.Join(childLines, "\n")
+}
+
+func parsedChunksFromChunks(chunks []chunker.Chunk) []types.ParsedChunk {
+	parsed := make([]types.ParsedChunk, len(chunks))
+	for i, c := range chunks {
+		parsed[i] = types.ParsedChunk{
+			Content:       c.Content,
+			ContextHeader: c.ContextHeader,
+			Seq:           c.Seq,
+			Start:         c.Start,
+			End:           c.End,
+		}
+	}
+	return parsed
+}
+
+func parsedChunksFromChildren(children []chunker.ChildChunk) []types.ParsedChunk {
+	parsed := make([]types.ParsedChunk, len(children))
+	for i, c := range children {
+		parsed[i] = types.ParsedChunk{
+			Content:       c.Content,
+			ContextHeader: c.ContextHeader,
+			Seq:           c.Seq,
+			Start:         c.Start,
+			End:           c.End,
+			ParentIndex:   c.ParentIndex,
+		}
+	}
+	return parsed
+}
+
+func parsedParentChunksFromChunks(chunks []chunker.Chunk) []types.ParsedParentChunk {
+	parents := make([]types.ParsedParentChunk, len(chunks))
+	for i, p := range chunks {
+		parents[i] = types.ParsedParentChunk{Content: p.Content, Seq: p.Seq, Start: p.Start, End: p.End}
+	}
+	return parents
+}
+
+func shouldIndexTextChunk(chunk *types.Chunk) bool {
+	if chunk == nil {
+		return false
+	}
+	text := strings.TrimSpace(chunk.Content)
+	if text == "" {
+		return false
+	}
+	if isPunctuationOrSymbolOnly(text) {
+		return false
+	}
+	if len([]rune(text)) <= 2 {
+		return !isWeakStandaloneText(text)
+	}
+	if len([]rune(text)) < 8 && isWeakStandaloneText(text) {
+		return false
+	}
+	return true
+}
+
+func isPunctuationOrSymbolOnly(text string) bool {
+	for _, r := range text {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isWeakStandaloneText(text string) bool {
+	cleaned := strings.TrimFunc(strings.TrimSpace(text), func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
+	})
+	if cleaned == "" {
+		return true
+	}
+	switch strings.ToLower(cleaned) {
+	case "and", "or", "but", "then", "thus", "so", "therefore",
+		"\u4e8e\u662f", // yu shi
+		"\u56e0\u6b64": // yin ci
+		return true
+	}
+	return isPunctuationOrSymbolOnly(text)
 }
 
 // processChunks processes chunks and creates embeddings for knowledge content
@@ -402,27 +626,21 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		return insertChunks[i].ChunkIndex < insertChunks[j].ChunkIndex
 	})
 
-	// 仅为文本类型的Chunk设置前后关系（child chunks only, parents already linked above）
+	// Collect text chunks for ordering and indexing; parent chunks are linked separately above.
 	textChunks := make([]*types.Chunk, 0, len(chunks))
 	for _, chunk := range insertChunks {
-		if chunk.ChunkType == types.ChunkTypeText && chunk.ParentChunkID != "" {
-			// This is a child chunk in parent-child mode
-			textChunks = append(textChunks, chunk)
-		} else if chunk.ChunkType == types.ChunkTypeText && !hasParentChild {
-			// Normal flat chunk (no parent-child mode)
+		if chunk.ChunkType == types.ChunkTypeText {
 			textChunks = append(textChunks, chunk)
 		}
 	}
 
-	// 设置文本Chunk之间的前后关系 (skip if parent-child, children don't need prev/next links)
-	if !hasParentChild {
-		for i, chunk := range textChunks {
-			if i > 0 {
-				textChunks[i-1].NextChunkID = chunk.ID
-			}
-			if i < len(textChunks)-1 {
-				textChunks[i+1].PreChunkID = chunk.ID
-			}
+	// Set prev/next links across text chunks in document order.
+	for i, chunk := range textChunks {
+		if i > 0 {
+			textChunks[i-1].NextChunkID = chunk.ID
+		}
+		if i < len(textChunks)-1 {
+			textChunks[i+1].PreChunkID = chunk.ID
 		}
 	}
 
@@ -460,6 +678,9 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 			titlePrefix = t + "\n"
 		}
 		for _, chunk := range textChunks {
+			if !shouldIndexTextChunk(chunk) {
+				continue
+			}
 			// chunk.EmbeddingContent prepends ContextHeader (heading breadcrumb)
 			// when the chunker populated it during Tier-1 splitting; falls back
 			// to plain Content otherwise. Title prefix sits outermost.
@@ -2166,9 +2387,6 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 		logger.Infof(ctx, "Resolved %d total images for knowledge %s", len(storedImages), knowledge.ID)
 	}
 
-	// Step 3: Split into chunks using Go chunker
-	chunkCfg := buildSplitterConfig(kb)
-
 	processOpts := ProcessChunksOptions{
 		EnableQuestionGeneration: payload.EnableQuestionGeneration,
 		QuestionCount:            payload.QuestionCount,
@@ -2180,39 +2398,12 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 		processOpts.Metadata = convertResult.Metadata
 	}
 
+	chunks, parentChunks := s.splitKnowledgeContent(ctx, kb, convertResult.MarkdownContent)
+	processOpts.ParentChunks = parentChunks
 	if kb.ChunkingConfig.EnableParentChild {
-		parentCfg, childCfg := buildParentChildConfigs(kb.ChunkingConfig, chunkCfg)
-		pcResult := chunker.SplitParentChild(convertResult.MarkdownContent, parentCfg, childCfg)
-		chunks = make([]types.ParsedChunk, len(pcResult.Children))
-		for i, c := range pcResult.Children {
-			chunks[i] = types.ParsedChunk{
-				Content:       c.Content,
-				ContextHeader: c.ContextHeader,
-				Seq:           c.Seq,
-				Start:         c.Start,
-				End:           c.End,
-				ParentIndex:   c.ParentIndex,
-			}
-		}
-		parentChunks := make([]types.ParsedParentChunk, len(pcResult.Parents))
-		for i, p := range pcResult.Parents {
-			parentChunks[i] = types.ParsedParentChunk{Content: p.Content, Seq: p.Seq, Start: p.Start, End: p.End}
-		}
-		processOpts.ParentChunks = parentChunks
 		logger.Infof(ctx, "Split document into %d parent + %d child chunks for knowledge %s",
-			len(pcResult.Parents), len(pcResult.Children), knowledge.ID)
+			len(parentChunks), len(chunks), knowledge.ID)
 	} else {
-		splitChunks := chunker.Split(convertResult.MarkdownContent, chunkCfg)
-		chunks = make([]types.ParsedChunk, len(splitChunks))
-		for i, c := range splitChunks {
-			chunks[i] = types.ParsedChunk{
-				Content:       c.Content,
-				ContextHeader: c.ContextHeader,
-				Seq:           c.Seq,
-				Start:         c.Start,
-				End:           c.End,
-			}
-		}
 		logger.Infof(ctx, "Split document into %d chunks for knowledge %s", len(chunks), knowledge.ID)
 	}
 

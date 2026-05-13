@@ -54,12 +54,14 @@ type PreviewChunkingRequest struct {
 // directly because it carries a lot of unrelated fields (parser engine
 // rules, parent-child sizes, etc.) that the preview path doesn't need.
 type PreviewChunkingPayload struct {
-	ChunkSize    int      `json:"chunk_size"`
-	ChunkOverlap int      `json:"chunk_overlap"`
-	Separators   []string `json:"separators"`
-	Strategy     string   `json:"strategy"`
-	TokenLimit   int      `json:"token_limit"`
-	Languages    []string `json:"languages"`
+	ChunkSize                    int      `json:"chunk_size"`
+	ChunkOverlap                 int      `json:"chunk_overlap"`
+	Separators                   []string `json:"separators"`
+	Strategy                     string   `json:"strategy"`
+	TokenLimit                   int      `json:"token_limit"`
+	Languages                    []string `json:"languages"`
+	SemanticBufferSize           int      `json:"semantic_buffer_size"`
+	SemanticBreakpointPercentile int      `json:"semantic_breakpoint_percentile"`
 }
 
 // PreviewChunkResult describes one chunk emitted during preview.
@@ -145,12 +147,14 @@ func PreviewChunking(c *gin.Context) {
 	}
 
 	cfg := chunker.SplitterConfig{
-		ChunkSize:    req.ChunkingConfig.ChunkSize,
-		ChunkOverlap: req.ChunkingConfig.ChunkOverlap,
-		Separators:   req.ChunkingConfig.Separators,
-		Strategy:     req.ChunkingConfig.Strategy,
-		TokenLimit:   req.ChunkingConfig.TokenLimit,
-		Languages:    req.ChunkingConfig.Languages,
+		ChunkSize:                    req.ChunkingConfig.ChunkSize,
+		ChunkOverlap:                 req.ChunkingConfig.ChunkOverlap,
+		Separators:                   req.ChunkingConfig.Separators,
+		Strategy:                     req.ChunkingConfig.Strategy,
+		TokenLimit:                   req.ChunkingConfig.TokenLimit,
+		Languages:                    req.ChunkingConfig.Languages,
+		SemanticBufferSize:           req.ChunkingConfig.SemanticBufferSize,
+		SemanticBreakpointPercentile: req.ChunkingConfig.SemanticBreakpointPercentile,
 	}
 
 	// Run the splitter on a goroutine so we can honor the request timeout.

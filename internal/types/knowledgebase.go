@@ -162,6 +162,13 @@ type ChunkingConfig struct {
 	// Languages hints the heuristic patterns. Empty = auto-detect from content.
 	// Examples: ["de"], ["en", "zh"].
 	Languages []string `yaml:"languages,omitempty" json:"languages,omitempty"`
+	// SemanticBufferSize is the sentence-window radius used by semantic
+	// chunking. Defaults to 1, matching LlamaIndex.
+	SemanticBufferSize int `yaml:"semantic_buffer_size,omitempty" json:"semantic_buffer_size,omitempty"`
+	// SemanticBreakpointPercentile is the percentile of adjacent sentence
+	// embedding distances used as the semantic breakpoint threshold. Defaults
+	// to 95, matching LlamaIndex.
+	SemanticBreakpointPercentile int `yaml:"semantic_breakpoint_percentile,omitempty" json:"semantic_breakpoint_percentile,omitempty"`
 }
 
 // ResolveParserEngine returns the engine name for the given file type

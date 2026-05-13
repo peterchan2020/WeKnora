@@ -205,6 +205,43 @@
             />
           </div>
         </div>
+
+        <!-- Semantic chunking -->
+        <div v-if="localStrategy === 'semantic'" class="setting-row">
+          <div class="setting-info">
+            <label>{{ $t('knowledgeEditor.chunking.semanticBufferSizeLabel') }}</label>
+            <p class="desc">{{ $t('knowledgeEditor.chunking.semanticBufferSizeDescription') }}</p>
+          </div>
+          <div class="setting-control">
+            <t-input-number
+              v-model="localSemanticBufferSize"
+              :min="0"
+              :max="3"
+              :step="1"
+              @change="handleSemanticBufferSizeChange"
+              style="width: 200px;"
+            />
+          </div>
+        </div>
+
+        <div v-if="localStrategy === 'semantic'" class="setting-row">
+          <div class="setting-info">
+            <label>{{ $t('knowledgeEditor.chunking.semanticBreakpointPercentileLabel') }}</label>
+            <p class="desc">{{ $t('knowledgeEditor.chunking.semanticBreakpointPercentileDescription') }}</p>
+          </div>
+          <div class="setting-control">
+            <t-slider
+              v-model="localSemanticBreakpointPercentile"
+              :min="50"
+              :max="99"
+              :step="1"
+              :marks="{ 50: '50', 80: '80', 95: '95', 99: '99' }"
+              @change="handleSemanticBreakpointPercentileChange"
+              style="width: 240px;"
+            />
+            <span class="value-display">{{ localSemanticBreakpointPercentile }}</span>
+          </div>
+        </div>
       </div>
 
     </div>
@@ -249,6 +286,8 @@ interface ChunkingConfig {
   tokenLimit?: number
   // Language hints for heuristic patterns (de/en/zh).
   languages?: string[]
+  semanticBufferSize?: number
+  semanticBreakpointPercentile?: number
 }
 
 interface Props {
@@ -272,6 +311,8 @@ const localChildChunkSize = ref(props.config.childChunkSize || 384)
 const localStrategy = ref(props.config.strategy ?? '')
 const localTokenLimit = ref(props.config.tokenLimit ?? 0)
 const localLanguages = ref<string[]>([...(props.config.languages ?? [])])
+const localSemanticBufferSize = ref(props.config.semanticBufferSize ?? 1)
+const localSemanticBreakpointPercentile = ref(props.config.semanticBreakpointPercentile ?? 95)
 const advancedOpen = ref(false)
 
 const strategyOptions = computed(() => [
@@ -279,6 +320,11 @@ const strategyOptions = computed(() => [
     label: t('knowledgeEditor.chunking.strategies.auto.label'),
     value: 'auto',
     tooltip: t('knowledgeEditor.chunking.strategies.auto.tooltip')
+  },
+  {
+    label: t('knowledgeEditor.chunking.strategies.semantic.label'),
+    value: 'semantic',
+    tooltip: t('knowledgeEditor.chunking.strategies.semantic.tooltip')
   },
   {
     label: t('knowledgeEditor.chunking.strategies.heading.label'),
@@ -318,7 +364,9 @@ const debugConfig = computed(() => ({
   separators: localSeparators.value,
   strategy: localStrategy.value,
   tokenLimit: localTokenLimit.value,
-  languages: localLanguages.value
+  languages: localLanguages.value,
+  semanticBufferSize: localSemanticBufferSize.value,
+  semanticBreakpointPercentile: localSemanticBreakpointPercentile.value
 }))
 
 const languageOptions = computed(() => [
@@ -348,6 +396,8 @@ watch(() => props.config, (newConfig) => {
   localStrategy.value = newConfig.strategy ?? ''
   localTokenLimit.value = newConfig.tokenLimit ?? 0
   localLanguages.value = [...(newConfig.languages ?? [])]
+  localSemanticBufferSize.value = newConfig.semanticBufferSize ?? 1
+  localSemanticBreakpointPercentile.value = newConfig.semanticBreakpointPercentile ?? 95
 }, { deep: true })
 
 const handleChunkSizeChange = () => { emitUpdate() }
@@ -359,6 +409,8 @@ const handleChildChunkSizeChange = () => { emitUpdate() }
 const handleStrategyChange = () => { emitUpdate() }
 const handleTokenLimitChange = () => { emitUpdate() }
 const handleLanguagesChange = () => { emitUpdate() }
+const handleSemanticBufferSizeChange = () => { emitUpdate() }
+const handleSemanticBreakpointPercentileChange = () => { emitUpdate() }
 
 const emitUpdate = () => {
   // Spread arrays so the parent gets its own copy. Mutating the emitted
@@ -374,7 +426,9 @@ const emitUpdate = () => {
     childChunkSize: localChildChunkSize.value,
     strategy: localStrategy.value,
     tokenLimit: localTokenLimit.value,
-    languages: [...localLanguages.value]
+    languages: [...localLanguages.value],
+    semanticBufferSize: localSemanticBufferSize.value,
+    semanticBreakpointPercentile: localSemanticBreakpointPercentile.value
   })
 }
 </script>

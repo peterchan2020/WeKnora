@@ -107,9 +107,11 @@ type KBModelConfigRequest struct {
 		// from "field present with empty/zero value" (clear / disable).
 		// Without that distinction, users could set strategy="auto" once
 		// but never reset it back to legacy / unset.
-		Strategy   *string   `json:"strategy,omitempty"`
-		TokenLimit *int      `json:"tokenLimit,omitempty"`
-		Languages  *[]string `json:"languages,omitempty"`
+		Strategy                     *string   `json:"strategy,omitempty"`
+		TokenLimit                   *int      `json:"tokenLimit,omitempty"`
+		Languages                    *[]string `json:"languages,omitempty"`
+		SemanticBufferSize           *int      `json:"semanticBufferSize,omitempty"`
+		SemanticBreakpointPercentile *int      `json:"semanticBreakpointPercentile,omitempty"`
 	} `json:"documentSplitting"`
 
 	// 多模态配置（仅模型相关；存储引擎在 storageProvider 中配置）
@@ -339,6 +341,12 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 	}
 	if req.DocumentSplitting.Languages != nil {
 		kb.ChunkingConfig.Languages = *req.DocumentSplitting.Languages
+	}
+	if req.DocumentSplitting.SemanticBufferSize != nil {
+		kb.ChunkingConfig.SemanticBufferSize = *req.DocumentSplitting.SemanticBufferSize
+	}
+	if req.DocumentSplitting.SemanticBreakpointPercentile != nil {
+		kb.ChunkingConfig.SemanticBreakpointPercentile = *req.DocumentSplitting.SemanticBreakpointPercentile
 	}
 
 	// 更新多模态配置
@@ -778,6 +786,25 @@ func (h *InitializationHandler) applyKnowledgeBaseInitialization(
 		ChunkSize:    req.DocumentSplitting.ChunkSize,
 		ChunkOverlap: req.DocumentSplitting.ChunkOverlap,
 		Separators:   req.DocumentSplitting.Separators,
+	}
+	kb.ChunkingConfig.ParserEngineRules = req.DocumentSplitting.ParserEngineRules
+	kb.ChunkingConfig.EnableParentChild = req.DocumentSplitting.EnableParentChild
+	kb.ChunkingConfig.ParentChunkSize = req.DocumentSplitting.ParentChunkSize
+	kb.ChunkingConfig.ChildChunkSize = req.DocumentSplitting.ChildChunkSize
+	if req.DocumentSplitting.Strategy != nil {
+		kb.ChunkingConfig.Strategy = *req.DocumentSplitting.Strategy
+	}
+	if req.DocumentSplitting.TokenLimit != nil {
+		kb.ChunkingConfig.TokenLimit = *req.DocumentSplitting.TokenLimit
+	}
+	if req.DocumentSplitting.Languages != nil {
+		kb.ChunkingConfig.Languages = *req.DocumentSplitting.Languages
+	}
+	if req.DocumentSplitting.SemanticBufferSize != nil {
+		kb.ChunkingConfig.SemanticBufferSize = *req.DocumentSplitting.SemanticBufferSize
+	}
+	if req.DocumentSplitting.SemanticBreakpointPercentile != nil {
+		kb.ChunkingConfig.SemanticBreakpointPercentile = *req.DocumentSplitting.SemanticBreakpointPercentile
 	}
 
 	if req.Multimodal.Enabled {

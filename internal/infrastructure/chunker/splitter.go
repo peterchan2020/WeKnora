@@ -71,6 +71,13 @@ type SplitterConfig struct {
 	TokenLimit int
 	// Languages hints multilingual heuristic patterns. Empty = auto-detect.
 	Languages []string
+	// SemanticBufferSize is the sentence-window radius used by semantic
+	// chunking. 1 matches LlamaIndex's SemanticSplitterNodeParser default.
+	SemanticBufferSize int
+	// SemanticBreakpointPercentile is the percentile of adjacent embedding
+	// distances used as the semantic breakpoint threshold. 95 matches
+	// LlamaIndex's default.
+	SemanticBreakpointPercentile int
 }
 
 // Default chunk sizing constants. Single source of truth for the entire
@@ -119,6 +126,7 @@ var protectedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)\$\$.*?\$\$`),                                                               // LaTeX block math
 	regexp.MustCompile(`!\[[^\]]*\]\([^)]+\)`),                                                          // Markdown images
 	regexp.MustCompile(`\[[^\]]*\]\([^)]+\)`),                                                           // Markdown links
+	regexp.MustCompile(`(?is)<table\b[^>]*>.*?</table>`),                                                // HTML tables
 	regexp.MustCompile("(?m)[ ]*(?:\\|[^|\\n]*)+\\|[\\r\\n]+\\s*(?:\\|\\s*:?-{3,}:?\\s*)+\\|[\\r\\n]+"), // Table header+separator
 	regexp.MustCompile("(?m)[ ]*(?:\\|[^|\\n]*)+\\|[\\r\\n]+"),                                          // Table rows
 	regexp.MustCompile("(?s)```(?:\\w+)?[\\r\\n].*?```"),                                                // Fenced code blocks
@@ -267,6 +275,46 @@ func runeLen(s string) int {
 	return utf8.RuneCountInString(s)
 }
 
+func maxChunkSizeForBudget(chunkSize int) int {
+	const hardMaxChunkSize = 7500
+	if chunkSize <= 0 {
+		return hardMaxChunkSize
+	}
+	budgetMax := chunkSize * 2
+	if budgetMax < chunkSize {
+		return hardMaxChunkSize
+	}
+	if budgetMax < hardMaxChunkSize {
+		return budgetMax
+	}
+	return hardMaxChunkSize
+}
+
+func forcedSplitEnd(runes []rune, offset, maxSize int) int {
+	chunkEnd := offset + maxSize
+	if chunkEnd >= len(runes) {
+		return len(runes)
+	}
+
+	tagSearchStart := chunkEnd - 500
+	if tagSearchStart < offset+1 {
+		tagSearchStart = offset + 1
+	}
+	for i := chunkEnd; i >= tagSearchStart; i-- {
+		tail := strings.ToLower(strings.TrimSpace(string(runes[offset:i])))
+		if strings.HasSuffix(tail, "</tr>") || strings.HasSuffix(tail, "</li>") || strings.HasSuffix(tail, "</p>") {
+			return i
+		}
+	}
+
+	for i := chunkEnd - 1; i > offset && i > chunkEnd-200; i-- {
+		if runes[i] == '\n' || runes[i] == ' ' {
+			return i + 1
+		}
+	}
+	return chunkEnd
+}
+
 // SplitText splits text into chunks with overlap, respecting protected patterns.
 func SplitText(text string, cfg SplitterConfig) []Chunk {
 	if text == "" {
@@ -304,7 +352,7 @@ func SplitText(text string, cfg SplitterConfig) []Chunk {
 // chunkSize is forwarded to splitBySeparators so recursive splitting can keep pieces
 // under the budget when one separator alone leaves a piece oversize.
 func buildUnitsWithProtection(text string, protected []span, separators []string, chunkSize int) []splitUnit {
-	const maxProtectedSize = 7500 // Maximum size for a protected unit (留余量给标题等)
+	maxProtectedSize := maxChunkSizeForBudget(chunkSize)
 
 	var units []splitUnit
 	bytePos := 0
@@ -336,18 +384,7 @@ func buildUnitsWithProtection(text string, protected []span, separators []string
 			runes := []rune(protText)
 			offset := 0
 			for offset < len(runes) {
-				chunkEnd := offset + maxProtectedSize
-				if chunkEnd > len(runes) {
-					chunkEnd = len(runes)
-				} else {
-					// Try to break at a newline or space
-					for i := chunkEnd - 1; i > offset && i > chunkEnd-200; i-- {
-						if runes[i] == '\n' || runes[i] == ' ' {
-							chunkEnd = i + 1
-							break
-						}
-					}
-				}
+				chunkEnd := forcedSplitEnd(runes, offset, maxProtectedSize)
 
 				chunkText := string(runes[offset:chunkEnd])
 				chunkLen := chunkEnd - offset
@@ -397,7 +434,7 @@ func mergeUnits(units []splitUnit, chunkSize, chunkOverlap int) []Chunk {
 		return nil
 	}
 
-	const absoluteMaxSize = 7500
+	absoluteMaxSize := maxChunkSizeForBudget(chunkSize)
 
 	ht := newHeaderTracker()
 
@@ -424,17 +461,7 @@ func mergeUnits(units []splitUnit, chunkSize, chunkOverlap int) []Chunk {
 			runes := []rune(u.text)
 			offset := 0
 			for offset < len(runes) {
-				chunkEnd := offset + absoluteMaxSize
-				if chunkEnd > len(runes) {
-					chunkEnd = len(runes)
-				} else {
-					for i := chunkEnd - 1; i > offset && i > chunkEnd-200; i-- {
-						if runes[i] == '\n' || runes[i] == ' ' {
-							chunkEnd = i + 1
-							break
-						}
-					}
-				}
+				chunkEnd := forcedSplitEnd(runes, offset, absoluteMaxSize)
 
 				chunkText := string(runes[offset:chunkEnd])
 				chunks = append(chunks, Chunk{

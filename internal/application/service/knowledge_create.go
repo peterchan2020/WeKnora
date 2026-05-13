@@ -13,7 +13,6 @@ import (
 	"time"
 
 	werrors "github.com/Tencent/WeKnora/internal/errors"
-	"github.com/Tencent/WeKnora/internal/infrastructure/chunker"
 	"github.com/Tencent/WeKnora/internal/infrastructure/docparser"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
@@ -1085,10 +1084,6 @@ func (s *knowledgeService) triggerManualProcessing(ctx context.Context,
 		}
 	}
 
-	// Manual content is markdown - chunk directly with Go chunker
-	chunkCfg := buildSplitterConfig(kb)
-
-	var parsed []types.ParsedChunk
 	opts := ProcessChunksOptions{
 		// When the KB has VLM enabled and we resolved remote images, pass them
 		// through so processChunks will enqueue image:multimodal tasks (OCR + caption).
@@ -1102,39 +1097,8 @@ func (s *knowledgeService) triggerManualProcessing(ctx context.Context,
 			opts.QuestionCount = 3
 		}
 	}
-
-	if kb.ChunkingConfig.EnableParentChild {
-		parentCfg, childCfg := buildParentChildConfigs(kb.ChunkingConfig, chunkCfg)
-		pcResult := chunker.SplitParentChild(clean, parentCfg, childCfg)
-		parsed = make([]types.ParsedChunk, len(pcResult.Children))
-		for i, c := range pcResult.Children {
-			parsed[i] = types.ParsedChunk{
-				Content:       c.Content,
-				ContextHeader: c.ContextHeader,
-				Seq:           c.Seq,
-				Start:         c.Start,
-				End:           c.End,
-				ParentIndex:   c.ParentIndex,
-			}
-		}
-		parentChunks := make([]types.ParsedParentChunk, len(pcResult.Parents))
-		for i, p := range pcResult.Parents {
-			parentChunks[i] = types.ParsedParentChunk{Content: p.Content, Seq: p.Seq, Start: p.Start, End: p.End}
-		}
-		opts.ParentChunks = parentChunks
-	} else {
-		splitChunks := chunker.Split(clean, chunkCfg)
-		parsed = make([]types.ParsedChunk, len(splitChunks))
-		for i, c := range splitChunks {
-			parsed[i] = types.ParsedChunk{
-				Content:       c.Content,
-				ContextHeader: c.ContextHeader,
-				Seq:           c.Seq,
-				Start:         c.Start,
-				End:           c.End,
-			}
-		}
-	}
+	parsed, parentChunks := s.splitKnowledgeContent(ctx, kb, clean)
+	opts.ParentChunks = parentChunks
 
 	if doSync {
 		s.processChunks(ctx, kb, knowledge, parsed, opts)

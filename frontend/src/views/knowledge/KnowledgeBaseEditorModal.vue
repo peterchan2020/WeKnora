@@ -499,7 +499,9 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
       // New KBs default to the adaptive auto-strategy. User can change in the UI.
       strategy: 'auto' as string,
       tokenLimit: 0,
-      languages: [] as string[]
+      languages: [] as string[],
+      semanticBufferSize: 1,
+      semanticBreakpointPercentile: 95
     },
     storageProvider: '' as string,
     multimodalConfig: {
@@ -862,6 +864,8 @@ const buildSubmitData = () => {
       strategy: formData.value.chunkingConfig.strategy ?? '',
       token_limit: formData.value.chunkingConfig.tokenLimit ?? 0,
       languages: formData.value.chunkingConfig.languages ?? [],
+      semantic_buffer_size: formData.value.chunkingConfig.semanticBufferSize ?? 1,
+      semantic_breakpoint_percentile: formData.value.chunkingConfig.semanticBreakpointPercentile ?? 95,
       ...(formData.value.chunkingConfig.parserEngineRules?.length
         ? { parser_engine_rules: formData.value.chunkingConfig.parserEngineRules }
         : {})
@@ -1052,7 +1056,9 @@ const doSubmit = async () => {
           // payload to let users reset back to defaults.
           strategy: formData.value?.chunkingConfig.strategy ?? '',
           tokenLimit: formData.value?.chunkingConfig.tokenLimit ?? 0,
-          languages: formData.value?.chunkingConfig.languages ?? []
+          languages: formData.value?.chunkingConfig.languages ?? [],
+          semanticBufferSize: formData.value?.chunkingConfig.semanticBufferSize ?? 1,
+          semanticBreakpointPercentile: formData.value?.chunkingConfig.semanticBreakpointPercentile ?? 95
         },
         multimodal: {
           enabled: !!data.vlm_config?.enabled

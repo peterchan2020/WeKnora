@@ -143,10 +143,9 @@ type ProcessChunksOptions struct {
 	Metadata     map[string]string
 }
 
-// buildSplitterConfig creates a SplitterConfig with fallbacks from a KnowledgeBase.
-// Defaults mirror chunker.DefaultChunkSize / DefaultChunkOverlap so behavior is
-// identical whether callers come through this path or invoke the chunker
-// directly with a zero-value config.
+// buildSplitterConfig creates a SplitterConfig with storage-level fallbacks from
+// a KnowledgeBase. Strategy-specific defaults remain in the chunker package so
+// explicit strategy values such as SemanticBufferSize=0 survive this layer.
 func buildSplitterConfig(kb *types.KnowledgeBase) chunker.SplitterConfig {
 	chunkCfg := chunker.SplitterConfig{
 		ChunkSize:                    kb.ChunkingConfig.ChunkSize,
@@ -166,12 +165,6 @@ func buildSplitterConfig(kb *types.KnowledgeBase) chunker.SplitterConfig {
 	}
 	if len(chunkCfg.Separators) == 0 {
 		chunkCfg.Separators = []string{"\n\n", "\n", "。"}
-	}
-	if chunkCfg.SemanticBufferSize == 0 {
-		chunkCfg.SemanticBufferSize = 1
-	}
-	if chunkCfg.SemanticBreakpointPercentile == 0 {
-		chunkCfg.SemanticBreakpointPercentile = 95
 	}
 	return chunkCfg
 }
@@ -282,7 +275,7 @@ func (s *knowledgeService) splitSemanticParentChild(
 	parentCfg, childCfg chunker.SplitterConfig,
 	semanticEmbedder embedding.Embedder,
 ) chunker.ParentChildResult {
-	parentCfg.Strategy = chunker.StrategyAuto
+	parentCfg.Strategy = parentStrategyForSemanticChild(parentCfg.Strategy)
 	parents := chunker.Split(text, parentCfg)
 	if len(parents) == 0 {
 		return chunker.ParentChildResult{}
@@ -309,6 +302,15 @@ func (s *knowledgeService) splitSemanticParentChild(
 		}
 	}
 	return chunker.ParentChildResult{Parents: newParents, Children: children}
+}
+
+func parentStrategyForSemanticChild(strategy string) string {
+	switch strings.TrimSpace(strategy) {
+	case "", chunker.StrategySemantic:
+		return chunker.StrategyAuto
+	default:
+		return strategy
+	}
 }
 
 func mergeContextHeaders(parent, child string) string {
@@ -409,7 +411,11 @@ func isWeakStandaloneText(text string) bool {
 	switch strings.ToLower(cleaned) {
 	case "and", "or", "but", "then", "thus", "so", "therefore",
 		"\u4e8e\u662f", // yu shi
-		"\u56e0\u6b64": // yin ci
+		"\u56e0\u6b64", // yin ci
+		"\u6240\u4ee5", // suo yi
+		"\u4e0d\u8fc7", // bu guo
+		"\u800c\u4e14", // er qie
+		"\u4f46\u662f": // dan shi
 		return true
 	}
 	return isPunctuationOrSymbolOnly(text)

@@ -114,7 +114,7 @@ func splitPlainSentences(runes []rune, base int) []sentenceSpan {
 func isSentenceBoundary(runes []rune, i int) bool {
 	r := runes[i]
 	switch r {
-	case '.', '!', '?', ';', ':', '。', '！', '？', '；', '：':
+	case '.', '!', '?', '。', '！', '？':
 		return true
 	case '\n':
 		return i > 0 && runes[i-1] == '\n'

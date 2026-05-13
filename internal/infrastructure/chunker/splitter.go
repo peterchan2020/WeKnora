@@ -6,6 +6,7 @@ package chunker
 import (
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/infrastructure/docparser"
@@ -301,8 +302,9 @@ func forcedSplitEnd(runes []rune, offset, maxSize int) int {
 		tagSearchStart = offset + 1
 	}
 	for i := chunkEnd; i >= tagSearchStart; i-- {
-		tail := strings.ToLower(strings.TrimSpace(string(runes[offset:i])))
-		if strings.HasSuffix(tail, "</tr>") || strings.HasSuffix(tail, "</li>") || strings.HasSuffix(tail, "</p>") {
+		if hasASCIITagSuffix(runes, offset, i, "</tr>") ||
+			hasASCIITagSuffix(runes, offset, i, "</li>") ||
+			hasASCIITagSuffix(runes, offset, i, "</p>") {
 			return i
 		}
 	}
@@ -313,6 +315,30 @@ func forcedSplitEnd(runes []rune, offset, maxSize int) int {
 		}
 	}
 	return chunkEnd
+}
+
+func hasASCIITagSuffix(runes []rune, start, end int, tag string) bool {
+	j := end - 1
+	for j >= start && unicode.IsSpace(runes[j]) {
+		j--
+	}
+	if j-start+1 < len(tag) {
+		return false
+	}
+	for k := len(tag) - 1; k >= 0; k-- {
+		if lowerASCII(runes[j]) != rune(tag[k]) {
+			return false
+		}
+		j--
+	}
+	return true
+}
+
+func lowerASCII(r rune) rune {
+	if r >= 'A' && r <= 'Z' {
+		return r + ('a' - 'A')
+	}
+	return r
 }
 
 // SplitText splits text into chunks with overlap, respecting protected patterns.

@@ -186,9 +186,18 @@ type InitializationRequest struct {
 	} `json:"multimodal"`
 
 	DocumentSplitting struct {
-		ChunkSize    int      `json:"chunkSize" binding:"required,min=100,max=10000"`
-		ChunkOverlap int      `json:"chunkOverlap" binding:"min=0"`
-		Separators   []string `json:"separators" binding:"required,min=1"`
+		ChunkSize         int                      `json:"chunkSize" binding:"required,min=100,max=10000"`
+		ChunkOverlap      int                      `json:"chunkOverlap" binding:"min=0"`
+		Separators        []string                 `json:"separators" binding:"required,min=1"`
+		ParserEngineRules []types.ParserEngineRule `json:"parserEngineRules,omitempty"`
+		EnableParentChild bool                     `json:"enableParentChild"`
+		ParentChunkSize   int                      `json:"parentChunkSize,omitempty"`
+		ChildChunkSize    int                      `json:"childChunkSize,omitempty"`
+		Strategy                     *string   `json:"strategy,omitempty"`
+		TokenLimit                   *int      `json:"tokenLimit,omitempty"`
+		Languages                    *[]string `json:"languages,omitempty"`
+		SemanticBufferSize           *int      `json:"semanticBufferSize,omitempty"`
+		SemanticBreakpointPercentile *int      `json:"semanticBreakpointPercentile,omitempty"`
 	} `json:"documentSplitting" binding:"required"`
 
 	NodeExtract struct {
@@ -1480,6 +1489,12 @@ func (h *InitializationHandler) buildConfigResponse(ctx context.Context, models 
 		}
 		if len(kb.ChunkingConfig.Languages) > 0 {
 			ds["languages"] = kb.ChunkingConfig.Languages
+		}
+		if kb.ChunkingConfig.Strategy == "semantic" || kb.ChunkingConfig.SemanticBufferSize > 0 {
+			ds["semanticBufferSize"] = kb.ChunkingConfig.SemanticBufferSize
+		}
+		if kb.ChunkingConfig.SemanticBreakpointPercentile > 0 {
+			ds["semanticBreakpointPercentile"] = kb.ChunkingConfig.SemanticBreakpointPercentile
 		}
 		config["documentSplitting"] = ds
 

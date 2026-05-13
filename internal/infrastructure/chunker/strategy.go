@@ -203,10 +203,7 @@ func resolveChainWithProfile(text string, cfg SplitterConfig) ([]StrategyTier, *
 	case StrategyHeuristic:
 		return []StrategyTier{TierHeuristic, TierLegacy}, nil
 	case StrategySemantic:
-		// The semantic tier needs an embedding model and is therefore run
-		// from the knowledge service via SplitSemantic. The pure chunker
-		// entry point falls back to legacy so preview/debug callers that do
-		// not have model access still return a deterministic result.
+		// Semantic chunking needs an embedding model, so the knowledge service		// calls SplitSemantic directly. Plain chunker callers fall back to the		// deterministic legacy splitter instead of trying to embed here.
 		return []StrategyTier{TierLegacy}, nil
 	case StrategyRecursive:
 		// "recursive" is a public-API alias for "legacy": both invoke

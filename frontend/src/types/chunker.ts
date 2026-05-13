@@ -68,5 +68,7 @@ export interface PreviewChunkingRequest {
     strategy?: string
     token_limit?: number
     languages?: string[]
+    semantic_buffer_size?: number
+    semantic_breakpoint_percentile?: number
   }
 }

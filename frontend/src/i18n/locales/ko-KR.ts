@@ -2625,6 +2625,10 @@ export default {
         legacy: {
           label: "길이 기준",
           tooltip: "구조를 무시하고 문자 수와 구분자로만 재귀 분할합니다 — 원래 동작. 위 전략들이 콘텐츠에서 잘못 작동할 때 사용하세요."
+        },
+        semantic: {
+          label: "의미 기반",
+          tooltip: "문장 창을 임베딩하고 의미 변화가 큰 지점에서 나눕니다. 임베딩을 사용할 수 없으면 길이 기준 분할로 자동 전환됩니다."
         }
       },
       overlapWarning: "오버랩이 청크 크기에 비해 큽니다 — 청크가 대부분의 콘텐츠를 공유합니다.",
@@ -2634,6 +2638,10 @@ export default {
       languagesLabel: "언어 힌트",
       languagesDescription: "휴리스틱 패턴을 선택한 언어(DE/EN/ZH)로만 제한합니다. 비어 있음 = 샘플에서 자동 감지. 동질적인 코퍼스는 명시적으로 설정하여 언어 간 오탐 방지.",
       languagesPlaceholder: "자동 감지",
+      semanticBufferSizeLabel: "의미 버퍼 크기",
+      semanticBufferSizeDescription: "임베딩 전에 함께 묶을 앞뒤 문장 수입니다. 기본값 1은 LlamaIndex와 동일하며, 0은 단일 문장만 비교합니다.",
+      semanticBreakpointPercentileLabel: "의미 분기점 백분위",
+      semanticBreakpointPercentileDescription: "인접 문장 창의 거리가 이 백분위보다 높을 때 분할합니다. 값이 높을수록 더 적고 큰 의미 청크가 생성됩니다.",
       languageOptions: {
         de: "독일어",
         en: "영어",

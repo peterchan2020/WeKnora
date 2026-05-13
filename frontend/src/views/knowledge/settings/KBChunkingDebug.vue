@@ -227,6 +227,8 @@ interface Props {
     strategy?: string
     tokenLimit?: number
     languages?: string[]
+    semanticBufferSize?: number
+    semanticBreakpointPercentile?: number
   }
 }
 
@@ -287,7 +289,9 @@ const runPreview = async () => {
         separators: props.config.separators,
         strategy: props.config.strategy ?? '',
         token_limit: props.config.tokenLimit ?? 0,
-        languages: props.config.languages ?? []
+        languages: props.config.languages ?? [],
+        semantic_buffer_size: props.config.semanticBufferSize ?? 1,
+        semantic_breakpoint_percentile: props.config.semanticBreakpointPercentile ?? 95
       }
     })
     // The axios interceptor in utils/request.ts already unwraps the

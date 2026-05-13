@@ -605,7 +605,9 @@ const loadKBData = async () => {
         // The user has to actively pick a value to opt in to the new tiers.
         strategy: kb.chunking_config?.strategy || '',
         tokenLimit: kb.chunking_config?.token_limit || 0,
-        languages: kb.chunking_config?.languages || []
+        languages: kb.chunking_config?.languages || [],
+        semanticBufferSize: kb.chunking_config?.semantic_buffer_size ?? 1,
+        semanticBreakpointPercentile: kb.chunking_config?.semantic_breakpoint_percentile ?? 95
       },
       storageProvider: (kb.storage_provider_config?.provider || kb.storage_config?.provider || 'local') as string,
       multimodalConfig: {

@@ -169,6 +169,13 @@
             </span>
           </div>
 
+          <div class="view-mode-row">
+            <t-radio-group v-model="renderMode" variant="default-filled" size="small">
+              <t-radio-button value="raw">{{ $t('knowledgeEditor.chunking.debug.rawMode') }}</t-radio-button>
+              <t-radio-button value="rendered">{{ $t('knowledgeEditor.chunking.debug.renderedMode') }}</t-radio-button>
+            </t-radio-group>
+          </div>
+
           <!-- Chunks list — no inner scroll; the drawer body handles scrolling
                so expanded cards always show their full content. -->
           <ol class="chunks-list">
@@ -193,10 +200,30 @@
                 <span v-if="c.context_header" class="chunk-context-pill" :title="c.context_header">
                   {{ c.context_header }}
                 </span>
+                <span v-if="structureSummary(c)" class="chunk-structure-tags">
+                  <t-tag
+                    v-for="tag in structureTags(c)"
+                    :key="tag.key"
+                    theme="primary"
+                    variant="light"
+                    size="small"
+                  >
+                    {{ tag.label }}
+                  </t-tag>
+                </span>
                 <chevron-down-icon class="chunk-toggle" :class="{ open: expandedChunks.has(c.seq) }" />
               </button>
               <div class="chunk-body" :class="{ collapsed: !expandedChunks.has(c.seq) }">
-                <pre class="chunk-text">{{ c.content }}</pre>
+                <pre v-if="renderMode === 'raw'" class="chunk-text">{{ c.content }}</pre>
+                <div
+                  v-else
+                  class="chunk-rendered markdown-body"
+                  v-html="renderChunk(c.content)"
+                ></div>
+                <div v-if="structureSummary(c)" class="chunk-structure-detail">
+                  <span class="structure-label">{{ $t('knowledgeEditor.chunking.debug.structure') }}</span>
+                  <span>{{ structureSummary(c) }}</span>
+                </div>
               </div>
             </li>
           </ol>
@@ -210,14 +237,21 @@
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
+import { marked } from 'marked'
+import markedKatex from 'marked-katex-extension'
+import 'katex/dist/katex.min.css'
 import {
   ChevronDownIcon,
   PlayCircleIcon,
   ErrorCircleIcon,
 } from 'tdesign-icons-vue-next'
 import { previewChunking } from '@/api/chunker'
-import type { PreviewChunkingResponse, StrategyTier } from '@/types/chunker'
+import type { PreviewChunk, PreviewChunkingResponse, StrategyTier } from '@/types/chunker'
+import { sanitizeHTML, safeMarkdownToHTML } from '@/utils/security'
 import { CHUNKING_SAMPLES, DEFAULT_SAMPLE_ID } from './chunkingSamples'
+
+marked.use({ breaks: true, gfm: true })
+marked.use(markedKatex({ throwOnError: false, nonStandard: false }))
 
 interface Props {
   embeddingModelId?: string
@@ -245,6 +279,7 @@ const loading = ref(false)
 const error = ref('')
 const result = ref<PreviewChunkingResponse | null>(null)
 const expandedChunks = ref(new Set<number>())
+const renderMode = ref<'raw' | 'rendered'>('raw')
 
 const samples = CHUNKING_SAMPLES
 
@@ -334,6 +369,46 @@ const toggleChunk = (seq: number) => {
   if (next.has(seq)) next.delete(seq)
   else next.add(seq)
   expandedChunks.value = next
+}
+
+const renderChunk = (content: string) => {
+  const html = marked.parse(safeMarkdownToHTML(content), {
+    breaks: true,
+    gfm: true,
+    async: false
+  }) as string
+  return sanitizeHTML(html)
+}
+
+const structureTags = (chunk: PreviewChunk) => {
+  const s = chunk.structure
+  if (!s) return []
+  return [
+    { key: 'table', label: `T ${s.table_count}`, count: s.table_count },
+    { key: 'formula', label: `∑ ${s.formula_count}`, count: s.formula_count },
+    { key: 'code', label: `{} ${s.code_count}`, count: s.code_count },
+    { key: 'image', label: `IMG ${s.image_count}`, count: s.image_count }
+  ].filter((item) => item.count > 0)
+}
+
+const structureSummary = (chunk: PreviewChunk) => {
+  const s = chunk.structure
+  if (!s) return ''
+  const parts: string[] = []
+  if (s.tables?.length) {
+    const first = s.tables[0]
+    parts.push(`${s.table_count} table${s.table_count > 1 ? 's' : ''}${first.summary ? `: ${first.summary}` : ''}`)
+  }
+  if (s.formula_count) parts.push(`${s.formula_count} formula${s.formula_count > 1 ? 's' : ''}`)
+  if (s.code_blocks?.length) {
+    const langs = Array.from(new Set(s.code_blocks.map((b) => b.language).filter(Boolean)))
+    parts.push(`${s.code_count} code${s.code_count > 1 ? ' blocks' : ' block'}${langs.length ? `: ${langs.join(', ')}` : ''}`)
+  }
+  if (s.images?.length) {
+    const first = s.images[0]
+    parts.push(`${s.image_count} image${s.image_count > 1 ? 's' : ''}${first.alt_text ? `: ${first.alt_text}` : ''}`)
+  }
+  return parts.join(' · ')
 }
 
 // `recursive` and `legacy` use the same SplitText path under the hood
@@ -587,6 +662,12 @@ const tierTheme = (tier: StrategyTier) => {
   font-size: 12px;
 }
 
+.view-mode-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
 .chunks-list {
   display: flex;
   flex-direction: column;
@@ -673,6 +754,13 @@ const tierTheme = (tier: StrategyTier) => {
   text-overflow: ellipsis;
 }
 
+.chunk-structure-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .chunk-toggle {
   margin-left: auto;
   flex-shrink: 0;
@@ -701,10 +789,68 @@ const tierTheme = (tier: StrategyTier) => {
   font-family: var(--td-font-family-mono, ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace);
 }
 
+.chunk-rendered {
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--td-text-color-primary);
+  word-break: break-word;
+
+  :deep(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-size: 12px;
+  }
+
+  :deep(th),
+  :deep(td) {
+    border: 1px solid var(--td-component-stroke);
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  :deep(th) {
+    background: var(--td-bg-color-container-hover);
+    font-weight: 600;
+  }
+
+  :deep(img) {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+  }
+
+  :deep(pre) {
+    overflow: auto;
+    padding: 10px 12px;
+    background: var(--td-bg-color-container-hover);
+    border-radius: 4px;
+  }
+}
+
+.chunk-structure-detail {
+  display: flex;
+  gap: 8px;
+  padding: 8px 14px 10px;
+  border-top: 1px dashed var(--td-component-stroke);
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  word-break: break-word;
+
+  .structure-label {
+    flex-shrink: 0;
+    color: var(--td-text-color-primary);
+    font-weight: 600;
+  }
+}
+
 // Collapsed preview: clamp the visible lines so each card stays compact, but
 // stays a real text block (not a JS slice) so wrapping/spacing match the
 // expanded view exactly.
-.chunk-body.collapsed .chunk-text {
+.chunk-body.collapsed .chunk-text,
+.chunk-body.collapsed .chunk-rendered {
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;

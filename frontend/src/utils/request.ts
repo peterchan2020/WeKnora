@@ -246,8 +246,8 @@ export function postChat(url: string, data = {}) {
   });
 }
 
-export function post(url: string, data = {}, config?: any) {
-  return instance.post(url, data, config);
+export function post<T = any>(url: string, data = {}, config?: any): Promise<T> {
+  return instance.post<any, T>(url, data, config);
 }
 
 export function put(url: string, data = {}) {

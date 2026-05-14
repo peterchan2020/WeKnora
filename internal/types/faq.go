@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -62,6 +63,15 @@ func (c *Chunk) DocumentMetadata() (*DocumentChunkMetadata, error) {
 	return &meta, nil
 }
 
+func isStructureMetadataKey(key string) bool {
+	switch key {
+	case "table_count", "table_summary", "table_columns", "formula_count", "code_block_count", "image_count":
+		return true
+	default:
+		return false
+	}
+}
+
 // SetDocumentMetadata 设置 Chunk 的文档元数据
 func (c *Chunk) SetDocumentMetadata(meta *DocumentChunkMetadata) error {
 	if c == nil {
@@ -75,7 +85,30 @@ func (c *Chunk) SetDocumentMetadata(meta *DocumentChunkMetadata) error {
 	if err != nil {
 		return err
 	}
-	c.Metadata = JSON(bytes)
+	if len(c.Metadata) == 0 {
+		c.Metadata = JSON(bytes)
+		return nil
+	}
+
+	var existing map[string]interface{}
+	if err := json.Unmarshal(c.Metadata, &existing); err != nil {
+		return err
+	}
+	var next map[string]interface{}
+	if err := json.Unmarshal(bytes, &next); err != nil {
+		return err
+	}
+	for k, v := range next {
+		if _, exists := existing[k]; exists && isStructureMetadataKey(k) {
+			return fmt.Errorf("chunk metadata key collision: %s", k)
+		}
+		existing[k] = v
+	}
+	merged, err := json.Marshal(existing)
+	if err != nil {
+		return err
+	}
+	c.Metadata = JSON(merged)
 	return nil
 }
 

@@ -77,13 +77,54 @@ type PreviewChunkingPayload struct {
 
 // PreviewChunkResult describes one chunk emitted during preview.
 type PreviewChunkResult struct {
-	Seq              int    `json:"seq"`
-	Start            int    `json:"start"`
-	End              int    `json:"end"`
-	SizeChars        int    `json:"size_chars"`
-	SizeTokensApprox int    `json:"size_tokens_approx"`
-	ContextHeader    string `json:"context_header,omitempty"`
-	Content          string `json:"content"`
+	Seq              int                    `json:"seq"`
+	Start            int                    `json:"start"`
+	End              int                    `json:"end"`
+	SizeChars        int                    `json:"size_chars"`
+	SizeTokensApprox int                    `json:"size_tokens_approx"`
+	ContextHeader    string                 `json:"context_header,omitempty"`
+	Content          string                 `json:"content"`
+	Structure        *PreviewChunkStructure `json:"structure,omitempty"`
+}
+
+type PreviewChunkStructure struct {
+	TableCount   int                    `json:"table_count"`
+	FormulaCount int                    `json:"formula_count"`
+	CodeCount    int                    `json:"code_count"`
+	ImageCount   int                    `json:"image_count"`
+	Tables       []PreviewTableDetail   `json:"tables,omitempty"`
+	Formulas     []PreviewFormulaDetail `json:"formulas,omitempty"`
+	CodeBlocks   []PreviewCodeDetail    `json:"code_blocks,omitempty"`
+	Images       []PreviewImageDetail   `json:"images,omitempty"`
+}
+
+type PreviewTableDetail struct {
+	Kind    string   `json:"kind"`
+	Columns []string `json:"columns,omitempty"`
+	Rows    int      `json:"rows"`
+	Summary string   `json:"summary,omitempty"`
+	Start   int      `json:"start"`
+	End     int      `json:"end"`
+}
+
+type PreviewFormulaDetail struct {
+	Kind  string `json:"kind"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+}
+
+type PreviewCodeDetail struct {
+	Language string `json:"language,omitempty"`
+	Start    int    `json:"start"`
+	End      int    `json:"end"`
+}
+
+type PreviewImageDetail struct {
+	URL         string `json:"url"`
+	AltText     string `json:"alt_text,omitempty"`
+	MarkdownRef string `json:"markdown_ref,omitempty"`
+	Start       int    `json:"start"`
+	End         int    `json:"end"`
 }
 
 // PreviewChunkingStats summarizes chunk-size distribution. Computed over
@@ -334,6 +375,7 @@ func buildPreviewResponse(
 			SizeTokensApprox: chunker.ApproxTokenCountFromRuneLen(runeLens[i], lang),
 			ContextHeader:    ch.ContextHeader,
 			Content:          ch.Content,
+			Structure:        buildPreviewChunkStructure(ch),
 		})
 	}
 
@@ -383,4 +425,82 @@ func computeChunkSizeStats(runeLens []int) PreviewChunkingStats {
 	stats.MaxChars = maxLen
 	stats.StddevChars = int(math.Sqrt(variance) + 0.5)
 	return stats
+}
+
+func buildPreviewChunkStructure(ch chunker.Chunk) *PreviewChunkStructure {
+	structure := PreviewChunkStructure{
+		TableCount:   len(ch.Tables),
+		FormulaCount: len(ch.Formulas),
+		CodeCount:    len(ch.CodeBlocks),
+		ImageCount:   len(ch.Images),
+	}
+	if structure.TableCount == 0 &&
+		structure.FormulaCount == 0 &&
+		structure.CodeCount == 0 &&
+		structure.ImageCount == 0 {
+		return nil
+	}
+	if len(ch.Tables) > 0 {
+		structure.Tables = make([]PreviewTableDetail, 0, len(ch.Tables))
+		for idx, tbl := range ch.Tables {
+			structure.Tables = append(structure.Tables, PreviewTableDetail{
+				Kind:    tbl.Kind,
+				Columns: tbl.Columns,
+				Rows:    tbl.Rows,
+				Summary: previewTableSummary(ch, idx),
+				Start:   tbl.Start,
+				End:     tbl.End,
+			})
+		}
+	}
+	if len(ch.Formulas) > 0 {
+		structure.Formulas = make([]PreviewFormulaDetail, 0, len(ch.Formulas))
+		for _, formula := range ch.Formulas {
+			structure.Formulas = append(structure.Formulas, PreviewFormulaDetail{
+				Kind:  formula.Kind,
+				Start: formula.Start,
+				End:   formula.End,
+			})
+		}
+	}
+	if len(ch.CodeBlocks) > 0 {
+		structure.CodeBlocks = make([]PreviewCodeDetail, 0, len(ch.CodeBlocks))
+		for _, code := range ch.CodeBlocks {
+			structure.CodeBlocks = append(structure.CodeBlocks, PreviewCodeDetail{
+				Language: code.Language,
+				Start:    code.Start,
+				End:      code.End,
+			})
+		}
+	}
+	if len(ch.Images) > 0 {
+		structure.Images = make([]PreviewImageDetail, 0, len(ch.Images))
+		for _, img := range ch.Images {
+			structure.Images = append(structure.Images, PreviewImageDetail{
+				URL:         img.OriginalRef,
+				AltText:     img.AltText,
+				MarkdownRef: previewContentSlice(ch.Content, img.Start, img.End),
+				Start:       img.Start,
+				End:         img.End,
+			})
+		}
+	}
+	return &structure
+}
+
+func previewContentSlice(content string, start, end int) string {
+	// ImageRef offsets are byte offsets relative to the chunk content; see
+	// chunker.ExtractImageRefs.
+	if start < 0 || end < start || end > len(content) {
+		return ""
+	}
+	return content[start:end]
+}
+
+func previewTableSummary(ch chunker.Chunk, idx int) string {
+	if idx != 0 || len(ch.Metadata) == 0 {
+		return ""
+	}
+	summary, _ := ch.Metadata["table_summary"].(string)
+	return summary
 }

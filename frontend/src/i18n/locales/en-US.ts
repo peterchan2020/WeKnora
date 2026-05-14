@@ -2029,6 +2029,9 @@ export default {
         sampleLabel: 'Sample text',
         samplePlaceholder: 'Paste a Markdown / plain-text snippet to see how the current configuration would chunk it…',
         presetLabel: 'Load sample:',
+        rawMode: 'Raw',
+        renderedMode: 'Rendered',
+        structure: 'Structure',
         samples: {
           markdown: 'Markdown doc',
           faq: 'FAQ list',

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/Tencent/WeKnora/internal/infrastructure/chunker"
@@ -22,6 +24,68 @@ func TestBuildSplitterConfigPreservesSemanticZeroBuffer(t *testing.T) {
 	}
 	if cfg.SemanticBreakpointPercentile != 0 {
 		t.Fatalf("SemanticBreakpointPercentile = %d, want zero left for chunker defaulting", cfg.SemanticBreakpointPercentile)
+	}
+}
+
+func TestParsedChunksFromChunksCarriesStructureMetadata(t *testing.T) {
+	chunks := []chunker.Chunk{
+		{
+			Content:  "| A | B |\n| --- | --- |\n| 1 | 2 |\n",
+			Seq:      0,
+			Start:    0,
+			End:      36,
+			Metadata: map[string]any{"table_count": 1, "table_summary": "A | B"},
+		},
+	}
+
+	parsed := parsedChunksFromChunks(chunks)
+	if len(parsed) != 1 {
+		t.Fatalf("parsed chunks = %d, want 1", len(parsed))
+	}
+	if got := parsed[0].Metadata["table_count"]; got != 1 {
+		t.Fatalf("table_count = %v, want 1", got)
+	}
+
+	raw := parsedChunkMetadataToJSON(context.Background(), parsed[0].Metadata)
+	var stored map[string]any
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatalf("metadata JSON should unmarshal: %v", err)
+	}
+	if got := stored["table_summary"]; got != "A | B" {
+		t.Fatalf("table_summary = %v, want A | B", got)
+	}
+}
+
+func TestParsedChunkMetadataToJSONDropsUnsupportedMetadata(t *testing.T) {
+	raw := parsedChunkMetadataToJSON(context.Background(), map[string]any{
+		"table_count": 1,
+		"bad":         func() {},
+	})
+	if raw != nil {
+		t.Fatalf("raw metadata = %s, want nil for unsupported metadata value", string(raw))
+	}
+}
+
+func TestSetDocumentMetadataPreservesStructureMetadata(t *testing.T) {
+	chunk := &types.Chunk{
+		Metadata: types.JSON(`{"table_count":1,"table_summary":"A | B"}`),
+	}
+	err := chunk.SetDocumentMetadata(&types.DocumentChunkMetadata{
+		GeneratedQuestions: []types.GeneratedQuestion{{ID: "q1", Question: "What is A?"}},
+	})
+	if err != nil {
+		t.Fatalf("SetDocumentMetadata failed: %v", err)
+	}
+
+	var stored map[string]any
+	if err := json.Unmarshal(chunk.Metadata, &stored); err != nil {
+		t.Fatalf("metadata JSON should unmarshal: %v", err)
+	}
+	if got := stored["table_count"]; got != float64(1) {
+		t.Fatalf("table_count = %v, want 1", got)
+	}
+	if _, ok := stored["generated_questions"]; !ok {
+		t.Fatalf("generated_questions missing from metadata: %v", stored)
 	}
 }
 

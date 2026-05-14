@@ -68,10 +68,9 @@ const DOMPurifyConfig = {
         return null;
       }
       // 移除所有事件处理器
-      const eventAttrs = ['onclick', 'onload', 'onerror', 'onmouseover', 'onfocus', 'onblur'];
-      eventAttrs.forEach(attr => {
-        if (currentNode.hasAttribute(attr)) {
-          currentNode.removeAttribute(attr);
+      Array.from(currentNode.attributes || []).forEach(attr => {
+        if (/^on/i.test(attr.name)) {
+          currentNode.removeAttribute(attr.name);
         }
       });
     },
@@ -94,6 +93,35 @@ const DOMPurifyConfig = {
     }
   }
 };
+
+DOMPurify.addHook('beforeSanitizeElements', (currentNode) => {
+  const currentElement = currentNode as Element;
+  if (!currentElement?.tagName) return;
+  if (currentElement.tagName === 'SCRIPT') {
+    currentElement.remove();
+    return;
+  }
+  Array.from(currentElement.attributes || []).forEach(attr => {
+    if (/^on/i.test(attr.name)) {
+      currentElement.removeAttribute(attr.name);
+    }
+  });
+});
+
+DOMPurify.addHook('afterSanitizeElements', (currentNode) => {
+  const currentElement = currentNode as Element;
+  if (!currentElement?.tagName) return;
+  if (currentElement.tagName === 'A') {
+    const href = currentElement.getAttribute('href');
+    if (href && href.startsWith('http')) {
+      currentElement.setAttribute('rel', 'noopener noreferrer');
+      currentElement.setAttribute('target', '_blank');
+    }
+  }
+  if (currentElement.tagName === 'IMG' && !currentElement.getAttribute('alt')) {
+    currentElement.setAttribute('alt', '');
+  }
+});
 
 /**
  * 安全地清理 HTML 内容

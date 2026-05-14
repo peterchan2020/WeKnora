@@ -80,6 +80,7 @@ type ParsedChunk struct {
 	Start         int
 	End           int
 	Images        []ParsedImage
+	Metadata      map[string]any
 	ChunkID       string // populated by processChunks with the actual DB UUID
 
 	// ParentIndex is set when using parent-child chunking strategy.

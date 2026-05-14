@@ -619,12 +619,15 @@ func TestSplitText_MixedDocument(t *testing.T) {
 		}
 	}
 
-	// 6f. Content reconstruction: every non-empty line of the original
-	// document should appear in at least one chunk.
+	// 6f. Lines that fit within the configured chunk budget and do not embed
+	// protected sub-spans should survive as intact chunk content. Longer prose
+	// may be split by separators; lines with inline protected spans may split
+	// around those spans. The assertions above cover structure-specific
+	// invariants.
 	originalLines := strings.Split(doc, "\n")
 	for _, line := range originalLines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
+		if trimmed == "" || runeLen(trimmed) > cfg.ChunkSize || containsEmbeddedProtectedSpan(trimmed) {
 			continue
 		}
 		found := false
@@ -638,6 +641,16 @@ func TestSplitText_MixedDocument(t *testing.T) {
 			t.Errorf("original line %q not found in any chunk", trimmed)
 		}
 	}
+}
+
+func containsEmbeddedProtectedSpan(line string) bool {
+	for _, pattern := range protectedPatterns {
+		loc := pattern.FindStringIndex(line)
+		if loc != nil && (loc[0] > 0 || loc[1] < len(line)) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

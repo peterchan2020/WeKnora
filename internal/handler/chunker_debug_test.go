@@ -116,12 +116,64 @@ func TestPreviewChunking_HappyPath_AutoStrategy(t *testing.T) {
 	if _, ok := data["chunks"].([]any); !ok {
 		t.Errorf("chunks must be an array, got %T", data["chunks"])
 	}
+	chunks := data["chunks"].([]any)
+	if len(chunks) == 0 {
+		t.Fatalf("expected at least one preview chunk")
+	}
+	firstChunk := chunks[0].(map[string]any)
+	if _, ok := firstChunk["structure"]; ok {
+		t.Errorf("plain chunk should omit empty structure object, got %T", firstChunk["structure"])
+	}
 	stats, ok := data["stats"].(map[string]any)
 	if !ok {
 		t.Fatalf("stats must be an object, got %T", data["stats"])
 	}
 	if c, _ := stats["count"].(float64); c <= 0 {
 		t.Errorf("stats.count should be > 0, got %v", stats["count"])
+	}
+}
+
+func TestPreviewChunking_ReturnsStructureDetails(t *testing.T) {
+	body := PreviewChunkingRequest{
+		Text: strings.Join([]string{
+			"| Name | Age |",
+			"| --- | --- |",
+			"| Alice | 30 |",
+			"",
+			"Formula: $$E=mc^2$$",
+			"",
+			"```go",
+			"func main() {}",
+			"```",
+			"",
+			"![diagram](provider://bucket/image.png)",
+		}, "\n"),
+		ChunkingConfig: PreviewChunkingPayload{
+			ChunkSize:    1000,
+			ChunkOverlap: 0,
+			Separators:   []string{"\n\n", "\n"},
+			Strategy:     "legacy",
+		},
+	}
+	w, parsed := postPreview(t, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+	}
+	data := parsed["data"].(map[string]any)
+	chunks := data["chunks"].([]any)
+	if len(chunks) == 0 {
+		t.Fatal("expected at least one chunk")
+	}
+	structure := chunks[0].(map[string]any)["structure"].(map[string]any)
+	for _, key := range []string{"table_count", "formula_count", "code_count", "image_count"} {
+		if got, _ := structure[key].(float64); got < 1 {
+			t.Fatalf("%s = %v, want >= 1; structure=%v", key, structure[key], structure)
+		}
+	}
+	tables := structure["tables"].([]any)
+	firstTable := tables[0].(map[string]any)
+	if got, _ := firstTable["summary"].(string); got != "Name | Age" {
+		t.Fatalf("table summary = %q, want %q", got, "Name | Age")
 	}
 }
 

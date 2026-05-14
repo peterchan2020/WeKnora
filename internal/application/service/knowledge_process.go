@@ -344,6 +344,7 @@ func parsedChunksFromChunks(chunks []chunker.Chunk) []types.ParsedChunk {
 			Start:         c.Start,
 			End:           c.End,
 			Images:        imageRefsToParsedImages(c.Images),
+			Metadata:      c.Metadata,
 		}
 	}
 	return parsed
@@ -369,6 +370,18 @@ func imageRefsToParsedImages(refs []chunker.ImageRef) []types.ParsedImage {
 	return images
 }
 
+func parsedChunkMetadataToJSON(ctx context.Context, metadata map[string]any) types.JSON {
+	if len(metadata) == 0 {
+		return nil
+	}
+	bytes, err := json.Marshal(metadata)
+	if err != nil {
+		logger.Debugf(ctx, "chunk metadata marshal failed: %v", err)
+		return nil
+	}
+	return types.JSON(bytes)
+}
+
 func parsedChunksFromChildren(children []chunker.ChildChunk) []types.ParsedChunk {
 	parsed := make([]types.ParsedChunk, len(children))
 	for i, c := range children {
@@ -380,6 +393,7 @@ func parsedChunksFromChildren(children []chunker.ChildChunk) []types.ParsedChunk
 			End:           c.End,
 			ParentIndex:   c.ParentIndex,
 			Images:        imageRefsToParsedImages(c.Images),
+			Metadata:      c.Metadata,
 		}
 	}
 	return parsed
@@ -638,6 +652,7 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 			StartAt:         int(chunkData.Start),
 			EndAt:           int(chunkData.End),
 			ChunkType:       types.ChunkTypeText,
+			Metadata:        parsedChunkMetadataToJSON(ctx, chunkData.Metadata),
 		}
 
 		// Wire up ParentChunkID for child chunks

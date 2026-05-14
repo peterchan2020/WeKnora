@@ -2616,6 +2616,9 @@ export default {
         sampleLabel: "示例文本",
         samplePlaceholder: "粘贴 Markdown / 纯文本片段以查看当前配置的分块结果…",
         presetLabel: "载入示例：",
+        rawMode: "原文",
+        renderedMode: "渲染",
+        structure: "结构",
         samples: {
           markdown: "Markdown 文档",
           faq: "FAQ 列表",

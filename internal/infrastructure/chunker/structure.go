@@ -75,7 +75,7 @@ func ExtractTableElements(text string) []TableElement {
 			Columns: parseMarkdownTableColumns(lines[0]),
 			Rows:    countMarkdownDataRows(lines),
 			Start:   loc[0],
-			End:     loc[1],
+			End:     loc[0] + len(content),
 		})
 	}
 	return sortTableElements(out)

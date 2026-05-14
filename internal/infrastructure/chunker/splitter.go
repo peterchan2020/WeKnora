@@ -63,7 +63,7 @@ func (c Chunk) EmbeddingContent() string {
 type ImageRef struct {
 	OriginalRef string
 	AltText     string
-	Start       int // offset within the chunk content
+	Start       int // byte offset within the chunk content
 	End         int
 }
 
@@ -138,7 +138,7 @@ var protectedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)\\\[.*?\\\]`),                                                               // LaTeX display math
 	regexp.MustCompile(`(?s)\\\(.*?\\\)`),                                                               // LaTeX inline math
 	regexp.MustCompile(`(?s)(^|[^\\$])\$[^$\n]+?\$`),                                                    // LaTeX inline math
-	regexp.MustCompile(`(?s)\\begin\{[a-zA-Z]+\*?\}.*?\\end\{[a-zA-Z]+\*?\}`),                          // LaTeX environments
+	regexp.MustCompile(`(?s)\\begin\{[a-zA-Z]+\*?\}.*?\\end\{[a-zA-Z]+\*?\}`),                           // LaTeX environments
 	regexp.MustCompile(`!\[[^\]]*\]\([^)]+\)`),                                                          // Markdown images
 	regexp.MustCompile(`\[[^\]]*\]\([^)]+\)`),                                                           // Markdown links
 	regexp.MustCompile(`(?is)<table\b[^>]*>.*?</table>`),                                                // HTML tables

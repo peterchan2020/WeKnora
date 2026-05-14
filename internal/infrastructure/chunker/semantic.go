@@ -43,7 +43,22 @@ func SplitSemantic(ctx context.Context, text string, cfg SplitterConfig, embedde
 		return SplitText(text, cfg), nil
 	}
 
-	windows := semanticWindows([]rune(text), sentences, cfg.SemanticBufferSize)
+	// For short documents, the default buffer=1 causes "mixed windows" that
+	// straddle topic boundaries — both W[i] and W[i+1] contain sentences from
+	// both topics, so dist(W[i], W[i+1]) is small and the real boundary is
+	// invisible. When sentences < 10, use buffer=0 so each window is exactly
+	// one sentence and adjacent-window distance directly measures sentence-pair
+	// semantic shift (LlamaIndex buffer_size=0 is explicitly documented for
+	// per-sentence evaluation).
+	buffer := cfg.SemanticBufferSize
+	if buffer < 0 {
+		buffer = 0
+	}
+	if len(sentences) < 10 {
+		buffer = 0
+	}
+
+	windows := semanticWindows([]rune(text), sentences, buffer)
 	embeddings, err := batchSemanticEmbeddings(ctx, embedder, windows)
 	if err != nil {
 		return nil, err
@@ -229,16 +244,30 @@ func buildSemanticChunks(runes []rune, sentences []sentenceSpan, breakAfter map[
 	var chunks []Chunk
 	seq := 0
 	groupStart := 0
+	// Track which chunk boundaries correspond to semantic breakpoints.
+	// semanticBreakAfterChunk[j] == true means the boundary between chunks[j]
+	// and chunks[j+1] was determined by a semantic embedding distance above
+	// threshold — the coalescer must not merge across it.
+	semanticBreakAfterChunk := make(map[int]bool)
+
 	for i := range sentences {
 		if i == len(sentences)-1 || breakAfter[i] {
 			chunks = appendSemanticGroup(chunks, runes, sentences[groupStart].start, sentences[i].end, cfg, &seq)
+			if breakAfter[i] {
+				semanticBreakAfterChunk[len(chunks)-1] = true
+			}
 			groupStart = i + 1
 		}
 	}
-	return coalesceTinySemanticChunks(chunks, cfg)
+	return coalesceTinySemanticChunks(chunks, semanticBreakAfterChunk, cfg)
 }
 
-func coalesceTinySemanticChunks(chunks []Chunk, cfg SplitterConfig) []Chunk {
+// coalesceTinySemanticChunks merges chunks whose trimmed rune length is below
+// the threshold into their nearest neighbor. Unlike the heuristic coalescer,
+// this function respects semantic breakpoints: it will never merge two chunks
+// across a boundary that was created by a semantic embedding distance above the
+// configured percentile threshold.
+func coalesceTinySemanticChunks(chunks []Chunk, semanticBreakAfter map[int]bool, cfg SplitterConfig) []Chunk {
 	if len(chunks) < 2 {
 		return chunks
 	}
@@ -253,6 +282,32 @@ func coalesceTinySemanticChunks(chunks []Chunk, cfg SplitterConfig) []Chunk {
 			continue
 		}
 
+		// If there is a semantic breakpoint immediately before this chunk
+		// (between chunks[i-1] and chunks[i]), do not merge backwards across it.
+		if i > 0 && semanticBreakAfter[i-1] {
+			// Try merging forward into the next chunk instead, but only if
+			// there is no semantic break after the current chunk either.
+			if i+1 < len(chunks) && !semanticBreakAfter[i] {
+				chunks[i+1] = mergeSemanticChunks(chunk, chunks[i+1])
+				continue
+			}
+			out = append(out, chunk)
+			continue
+		}
+
+		// If there is a semantic breakpoint immediately after this chunk,
+		// do not merge forward across it.
+		if semanticBreakAfter[i] {
+			// Try merging backward instead.
+			if len(out) > 0 && canMergeSemanticChunks(out[len(out)-1], chunk, cfg) {
+				out[len(out)-1] = mergeSemanticChunks(out[len(out)-1], chunk)
+				continue
+			}
+			out = append(out, chunk)
+			continue
+		}
+
+		// No semantic break on either side — use the default merge logic.
 		if len(out) > 0 && canMergeSemanticChunks(out[len(out)-1], chunk, cfg) {
 			out[len(out)-1] = mergeSemanticChunks(out[len(out)-1], chunk)
 			continue

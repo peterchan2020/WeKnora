@@ -39,6 +39,47 @@ export interface PreviewChunk {
   size_tokens_approx: number
   context_header?: string
   content: string
+  structure?: PreviewChunkStructure
+}
+
+export interface PreviewChunkStructure {
+  table_count: number
+  formula_count: number
+  code_count: number
+  image_count: number
+  tables?: PreviewTableDetail[]
+  formulas?: PreviewFormulaDetail[]
+  code_blocks?: PreviewCodeDetail[]
+  images?: PreviewImageDetail[]
+}
+
+export interface PreviewTableDetail {
+  kind: string
+  columns?: string[]
+  rows: number
+  summary?: string
+  start: number
+  end: number
+}
+
+export interface PreviewFormulaDetail {
+  kind: string
+  start: number
+  end: number
+}
+
+export interface PreviewCodeDetail {
+  language?: string
+  start: number
+  end: number
+}
+
+export interface PreviewImageDetail {
+  url: string
+  alt_text?: string
+  markdown_ref?: string
+  start: number
+  end: number
 }
 
 export interface PreviewChunkingStats {

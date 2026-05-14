@@ -2,6 +2,7 @@ package chunker
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,19 @@ func (fakeSemanticEmbedder) BatchEmbed(_ context.Context, texts []string) ([][]f
 		default:
 			out[i] = []float32{1, 0}
 		}
+	}
+	return out, nil
+}
+
+type recordingSemanticEmbedder struct {
+	batchSizes []int
+}
+
+func (e *recordingSemanticEmbedder) BatchEmbed(_ context.Context, texts []string) ([][]float32, error) {
+	e.batchSizes = append(e.batchSizes, len(texts))
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = []float32{1, 0}
 	}
 	return out, nil
 }
@@ -43,6 +57,32 @@ func TestSplitSemantic_BreaksAtEmbeddingDistance(t *testing.T) {
 	}
 	if !strings.Contains(chunks[1].Content, "beta begins now") {
 		t.Errorf("second chunk should contain beta topic, got %q", chunks[1].Content)
+	}
+}
+
+func TestSplitSemantic_BatchesEmbeddingWindows(t *testing.T) {
+	var sentences []string
+	for i := 0; i < semanticEmbeddingBatchSize+7; i++ {
+		sentences = append(sentences, fmt.Sprintf("sentence %d stays on topic.", i))
+	}
+	embedder := &recordingSemanticEmbedder{}
+	cfg := SplitterConfig{
+		ChunkSize:                    1000,
+		ChunkOverlap:                 0,
+		SemanticBufferSize:           0,
+		SemanticBreakpointPercentile: 80,
+	}
+
+	if _, err := SplitSemantic(context.Background(), strings.Join(sentences, " "), cfg, embedder); err != nil {
+		t.Fatalf("SplitSemantic returned error: %v", err)
+	}
+	if len(embedder.batchSizes) < 2 {
+		t.Fatalf("expected embedding windows to be split into multiple batches, got %v", embedder.batchSizes)
+	}
+	for _, size := range embedder.batchSizes {
+		if size > semanticEmbeddingBatchSize {
+			t.Fatalf("embedding batch size exceeded cap %d: %v", semanticEmbeddingBatchSize, embedder.batchSizes)
+		}
 	}
 }
 

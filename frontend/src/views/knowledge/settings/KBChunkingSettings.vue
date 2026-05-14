@@ -26,7 +26,7 @@
           <!-- Test trigger sits right next to the strategy picker so users
                discover it exactly when they're deciding which strategy to
                use on their content. -->
-          <KBChunkingDebug :config="debugConfig" />
+          <KBChunkingDebug :config="debugConfig" :embedding-model-id="embeddingModelId" />
         </div>
       </div>
 
@@ -292,6 +292,7 @@ interface ChunkingConfig {
 
 interface Props {
   config: ChunkingConfig
+  embeddingModelId?: string
 }
 
 const props = defineProps<Props>()

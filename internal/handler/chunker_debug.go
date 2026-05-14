@@ -1,19 +1,24 @@
 // Package handler — chunker_debug.go exposes a read-only preview endpoint
-// that runs the adaptive chunker on supplied text without touching the DB
-// or generating embeddings. Used by the KB editor's debug panel so users
-// can experiment with chunking parameters before committing to a re-index.
+// that runs the adaptive chunker on supplied text without touching the DB.
+// Semantic previews resolve the selected embedding model because semantic
+// chunking needs embeddings to choose breakpoints. Used by the KB editor's
+// debug panel so users can experiment with chunking parameters before
+// committing to a re-index.
 package handler
 
 import (
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	modelsvc "github.com/Tencent/WeKnora/internal/application/service"
 	"github.com/Tencent/WeKnora/internal/infrastructure/chunker"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/gin-gonic/gin"
 )
 
@@ -41,12 +46,18 @@ const previewMaxChunks = 500
 // goroutine before returning a 504. See note above on previewMaxChars.
 const previewTimeout = 5 * time.Second
 
+// semanticPreviewTimeout is longer because semantic preview must call the
+// configured embedding model. Keep it below the frontend request timeout with
+// enough margin for response serialization.
+const semanticPreviewTimeout = 25 * time.Second
+
 // PreviewChunkingRequest is the body shape accepted by /chunker/preview.
 // Text is checked manually below so we can return a friendlier error than
 // gin's default "Field validation for 'Text' failed on the 'required' tag".
 type PreviewChunkingRequest struct {
-	Text           string                 `json:"text"`
-	ChunkingConfig PreviewChunkingPayload `json:"chunking_config"`
+	Text             string                 `json:"text"`
+	EmbeddingModelID string                 `json:"embedding_model_id"`
+	ChunkingConfig   PreviewChunkingPayload `json:"chunking_config"`
 }
 
 // PreviewChunkingPayload mirrors the snake_case JSON the rest of the API
@@ -100,10 +111,10 @@ type PreviewChunkingResponse struct {
 	Stats        PreviewChunkingStats    `json:"stats"`
 }
 
-// PreviewChunking handles POST /chunker/preview. It runs the supplied text
+// PreviewChunkingWithModelService handles POST /chunker/preview. It runs the supplied text
 // through the adaptive chunker and returns the chunks plus diagnostic
-// information about which tier won. Read-only: no DB writes, no embedding
-// calls, no logging of the supplied text.
+// information about which tier won. Read-only: no DB writes and no logging
+// of the supplied text.
 //
 // PreviewChunking godoc
 // @Summary      预览分块结果
@@ -119,10 +130,15 @@ type PreviewChunkingResponse struct {
 // @Security     Bearer
 // @Security     ApiKeyAuth
 // @Router       /chunker/preview [post]
-func PreviewChunking(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), previewTimeout)
-	defer cancel()
+// PreviewChunkingWithModelService returns a preview handler that can resolve
+// the current embedding model for semantic chunking previews.
+func PreviewChunkingWithModelService(modelService interfaces.ModelService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		previewChunking(c, modelService)
+	}
+}
 
+func previewChunking(c *gin.Context, modelService interfaces.ModelService) {
 	var req PreviewChunkingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body: " + err.Error()})
@@ -156,6 +172,16 @@ func PreviewChunking(c *gin.Context) {
 		SemanticBufferSize:           req.ChunkingConfig.SemanticBufferSize,
 		SemanticBreakpointPercentile: req.ChunkingConfig.SemanticBreakpointPercentile,
 	}
+
+	if strings.EqualFold(strings.TrimSpace(cfg.Strategy), chunker.StrategySemantic) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), semanticPreviewTimeout)
+		defer cancel()
+		handleSemanticPreview(c, ctx, req, cfg, modelService)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), previewTimeout)
+	defer cancel()
 
 	// Run the splitter on a goroutine so we can honor the request timeout.
 	// The splitter is CPU-bound and doesn't accept a context — wrapping
@@ -193,8 +219,90 @@ func PreviewChunking(c *gin.Context) {
 
 	logger.Debugf(ctx, "chunker preview: tier=%s chunks=%d", diag.SelectedTier, len(chunks))
 
+	resp := buildPreviewResponse(chunks, diag, profile)
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": resp})
+}
+
+func handleSemanticPreview(
+	c *gin.Context,
+	ctx context.Context,
+	req PreviewChunkingRequest,
+	cfg chunker.SplitterConfig,
+	modelService interfaces.ModelService,
+) {
+	modelID := strings.TrimSpace(req.EmbeddingModelID)
+	if modelID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "semantic chunking preview requires an embedding model",
+		})
+		return
+	}
+	if modelService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "semantic chunking preview is not wired to a model service",
+		})
+		return
+	}
+
+	embedder, err := modelService.GetEmbeddingModel(ctx, modelID)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, modelsvc.ErrModelNotFound) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{
+			"success": false,
+			"error":   "failed to load embedding model for semantic preview: " + err.Error(),
+		})
+		return
+	}
+
+	type splitResult struct {
+		chunks []chunker.Chunk
+		err    error
+	}
+	resCh := make(chan splitResult, 1)
+	go func() {
+		chunks, err := chunker.SplitSemantic(ctx, req.Text, cfg, embedder)
+		resCh <- splitResult{chunks: chunks, err: err}
+	}()
+
+	var sr splitResult
+	select {
+	case sr = <-resCh:
+	case <-ctx.Done():
+		c.JSON(http.StatusGatewayTimeout, gin.H{
+			"success": false,
+			"error":   "semantic chunker preview timed out",
+		})
+		return
+	}
+	if sr.err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "semantic chunking preview failed: " + sr.err.Error(),
+		})
+		return
+	}
+
+	profile := chunker.ProfileDocument(req.Text)
+	resp := buildPreviewResponse(sr.chunks, &chunker.Diagnostics{
+		SelectedTier: chunker.TierSemantic,
+		TierChain:    []chunker.StrategyTier{chunker.TierSemantic},
+		Profile:      profile,
+	}, profile)
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": resp})
+}
+
+func buildPreviewResponse(
+	chunks []chunker.Chunk,
+	diag *chunker.Diagnostics,
+	profile *chunker.DocProfile,
+) PreviewChunkingResponse {
 	lang := chunker.LangMixed
-	if len(profile.DetectedLangs) > 0 {
+	if profile != nil && len(profile.DetectedLangs) > 0 {
 		lang = profile.DetectedLangs[0]
 	}
 
@@ -229,7 +337,10 @@ func PreviewChunking(c *gin.Context) {
 		})
 	}
 
-	resp := PreviewChunkingResponse{
+	if diag == nil {
+		diag = &chunker.Diagnostics{SelectedTier: chunker.TierLegacy}
+	}
+	return PreviewChunkingResponse{
 		SelectedTier: diag.SelectedTier,
 		TierChain:    diag.TierChain,
 		Rejected:     diag.Rejected,
@@ -237,7 +348,6 @@ func PreviewChunking(c *gin.Context) {
 		Chunks:       results,
 		Stats:        stats,
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": resp})
 }
 
 // computeChunkSizeStats summarizes count / avg / min / max / stddev from

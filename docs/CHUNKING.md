@@ -108,9 +108,11 @@ collapsible at the bottom:
    - Per-chunk cards with size in chars + approximate tokens, position
      range, the section breadcrumb (when set), and a content preview
 
-This runs read-only against a goroutine-isolated splitter pass (5s
-timeout) — no DB writes, no embedding API calls. Use it to compare
-configurations against the same sample before triggering a re-upload.
+This runs read-only against a goroutine-isolated splitter pass. Structural
+preview uses a 5s timeout; semantic preview uses the selected embedding model
+and allows a longer request window. The endpoint does not write to the DB. Use
+it to compare configurations against the same sample before triggering a
+re-upload.
 
 ## API
 

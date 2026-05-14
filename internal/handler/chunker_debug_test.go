@@ -66,7 +66,7 @@ func TestComputeChunkSizeStats_NoVarianceUnderflow(t *testing.T) {
 
 func newPreviewRouter() *gin.Engine {
 	r := gin.New()
-	r.POST("/chunker/preview", PreviewChunking)
+	r.POST("/chunker/preview", PreviewChunkingWithModelService(nil))
 	return r
 }
 
@@ -169,6 +169,24 @@ func TestPreviewChunking_LegacyStrategy_NoProfile(t *testing.T) {
 	}
 	if string(chunker.StrategyTier(data["selected_tier"].(string))) != string(chunker.TierLegacy) {
 		t.Errorf("selected_tier: got %v want %s", data["selected_tier"], chunker.TierLegacy)
+	}
+}
+
+func TestPreviewChunking_SemanticRequiresEmbeddingModel(t *testing.T) {
+	body := PreviewChunkingRequest{
+		Text: "alpha starts here. beta starts there.",
+		ChunkingConfig: PreviewChunkingPayload{
+			ChunkSize:    100,
+			ChunkOverlap: 0,
+			Strategy:     chunker.StrategySemantic,
+		},
+	}
+	w, parsed := postPreview(t, body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400; body=%s", w.Code, w.Body.String())
+	}
+	if errStr, _ := parsed["error"].(string); !strings.Contains(errStr, "embedding model") {
+		t.Errorf("error should mention embedding model, got %q", errStr)
 	}
 }
 

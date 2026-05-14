@@ -220,6 +220,7 @@ import type { PreviewChunkingResponse, StrategyTier } from '@/types/chunker'
 import { CHUNKING_SAMPLES, DEFAULT_SAMPLE_ID } from './chunkingSamples'
 
 interface Props {
+  embeddingModelId?: string
   config: {
     chunkSize: number
     chunkOverlap: number
@@ -278,11 +279,15 @@ const runPreview = async () => {
   result.value = null
   expandedChunks.value = new Set()
   try {
+    if ((props.config.strategy ?? '') === 'semantic' && !props.embeddingModelId) {
+      throw new Error(t('knowledgeEditor.indexing.embeddingRequired'))
+    }
     // Send all fields explicitly (including empty / 0 / []) so the
     // preview faithfully reflects what would happen on save. Mirrors
     // the buildSubmitData convention in KnowledgeBaseEditorModal.
     const resp = await previewChunking({
       text: sample.value,
+      embedding_model_id: props.embeddingModelId,
       chunking_config: {
         chunk_size: props.config.chunkSize,
         chunk_overlap: props.config.chunkOverlap,
@@ -317,8 +322,6 @@ const runPreview = async () => {
       (typeof e === 'string' ? e : '') ||
       'unknown error'
     error.value = msg
-    // Console log so users can debug from DevTools too.
-    console.error('[KBChunkingDebug] previewChunking failed:', e)
     // Toast for visibility.
     MessagePlugin.error(t('knowledgeEditor.chunking.debug.errorPrefix') + ': ' + msg)
   } finally {
@@ -346,6 +349,7 @@ const tierDisplay = (tier: StrategyTier) => {
 
 const tierTheme = (tier: StrategyTier) => {
   switch (normalizeTier(tier)) {
+    case 'semantic':
     case 'heading':
     case 'heuristic':
       return 'success'

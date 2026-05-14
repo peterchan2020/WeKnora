@@ -209,6 +209,7 @@
                   <KBChunkingSettings
                     v-if="formData"
                     :config="formData.chunkingConfig"
+                    :embedding-model-id="formData.modelConfig.embeddingModelId"
                     @update:config="handleChunkingConfigUpdate"
                   />
                 </div>

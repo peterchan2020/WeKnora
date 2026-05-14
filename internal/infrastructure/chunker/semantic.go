@@ -16,6 +16,8 @@ type SemanticEmbedder interface {
 	BatchEmbed(ctx context.Context, texts []string) ([][]float32, error)
 }
 
+const semanticEmbeddingBatchSize = 10
+
 type sentenceSpan struct {
 	start int
 	end   int
@@ -42,7 +44,7 @@ func SplitSemantic(ctx context.Context, text string, cfg SplitterConfig, embedde
 	}
 
 	windows := semanticWindows([]rune(text), sentences, cfg.SemanticBufferSize)
-	embeddings, err := embedder.BatchEmbed(ctx, windows)
+	embeddings, err := batchSemanticEmbeddings(ctx, embedder, windows)
 	if err != nil {
 		return nil, err
 	}
@@ -73,6 +75,22 @@ func SplitSemantic(ctx context.Context, text string, cfg SplitterConfig, embedde
 	return chunks, nil
 }
 
+func batchSemanticEmbeddings(ctx context.Context, embedder SemanticEmbedder, texts []string) ([][]float32, error) {
+	embeddings := make([][]float32, 0, len(texts))
+	for start := 0; start < len(texts); start += semanticEmbeddingBatchSize {
+		end := start + semanticEmbeddingBatchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		batch, err := embedder.BatchEmbed(ctx, texts[start:end])
+		if err != nil {
+			return nil, err
+		}
+		embeddings = append(embeddings, batch...)
+	}
+	return embeddings, nil
+}
+
 func semanticSentences(text string) []sentenceSpan {
 	runes := []rune(text)
 	protected := protectedSpansRune(text, protectedSpans(text))
@@ -95,9 +113,10 @@ func semanticSentences(text string) []sentenceSpan {
 
 func splitPlainSentences(runes []rune, base int) []sentenceSpan {
 	var out []sentenceSpan
+	insidePaired := insidePairedPunctuation(runes)
 	start := 0
 	for i := 0; i < len(runes); i++ {
-		if isSentenceBoundary(runes, i) {
+		if isSentenceBoundary(runes, i, insidePaired) {
 			end := i + 1
 			if end > start {
 				out = append(out, sentenceSpan{start: base + start, end: base + end})
@@ -111,15 +130,80 @@ func splitPlainSentences(runes []rune, base int) []sentenceSpan {
 	return out
 }
 
-func isSentenceBoundary(runes []rune, i int) bool {
+func isSentenceBoundary(runes []rune, i int, insidePaired []bool) bool {
 	r := runes[i]
 	switch r {
 	case '.', '!', '?', '。', '！', '？':
+		if insidePaired[i] || hasAdjacentSentencePunctuation(runes, i) {
+			return false
+		}
 		return true
 	case '\n':
 		return i > 0 && runes[i-1] == '\n'
 	}
 	return false
+}
+
+func insidePairedPunctuation(runes []rune) []bool {
+	inside := make([]bool, len(runes))
+	var stack []rune
+	for pos, r := range runes {
+		switch r {
+		case '(', '（', '[', '【', '{', '「', '『', '《':
+			stack = append(stack, r)
+		case ')', '）', ']', '】', '}', '」', '』', '》':
+			if len(stack) > 0 && isMatchingClose(stack[len(stack)-1], r) {
+				stack = stack[:len(stack)-1]
+			}
+		}
+		inside[pos] = len(stack) > 0
+	}
+	return inside
+}
+
+func isMatchingClose(open, close rune) bool {
+	switch open {
+	case '(':
+		return close == ')'
+	case '（':
+		return close == '）'
+	case '[':
+		return close == ']'
+	case '【':
+		return close == '】'
+	case '{':
+		return close == '}'
+	case '「':
+		return close == '」'
+	case '『':
+		return close == '』'
+	case '《':
+		return close == '》'
+	default:
+		return false
+	}
+}
+
+func hasAdjacentSentencePunctuation(runes []rune, i int) bool {
+	for right := i + 1; right < len(runes); right++ {
+		if runes[right] == ' ' || runes[right] == '\t' {
+			continue
+		}
+		if isSentencePunctuation(runes[right]) {
+			return true
+		}
+		break
+	}
+	return false
+}
+
+func isSentencePunctuation(r rune) bool {
+	switch r {
+	case '.', '!', '?', '。', '！', '？':
+		return true
+	default:
+		return false
+	}
 }
 
 func semanticWindows(runes []rune, sentences []sentenceSpan, buffer int) []string {
@@ -151,7 +235,63 @@ func buildSemanticChunks(runes []rune, sentences []sentenceSpan, breakAfter map[
 			groupStart = i + 1
 		}
 	}
-	return chunks
+	return coalesceTinySemanticChunks(chunks, cfg)
+}
+
+func coalesceTinySemanticChunks(chunks []Chunk, cfg SplitterConfig) []Chunk {
+	if len(chunks) < 2 {
+		return chunks
+	}
+
+	chunks = append([]Chunk(nil), chunks...)
+	threshold := tinySemanticChunkThreshold(cfg)
+	out := make([]Chunk, 0, len(chunks))
+	for i := 0; i < len(chunks); i++ {
+		chunk := chunks[i]
+		if i == 0 || i == len(chunks)-1 || len([]rune(strings.TrimSpace(chunk.Content))) >= threshold {
+			out = append(out, chunk)
+			continue
+		}
+
+		if len(out) > 0 && canMergeSemanticChunks(out[len(out)-1], chunk, cfg) {
+			out[len(out)-1] = mergeSemanticChunks(out[len(out)-1], chunk)
+			continue
+		}
+		if i+1 < len(chunks) {
+			chunks[i+1] = mergeSemanticChunks(chunk, chunks[i+1])
+			continue
+		}
+		out = append(out, chunk)
+	}
+
+	for i := range out {
+		out[i].Seq = i
+	}
+	return out
+}
+
+func tinySemanticChunkThreshold(cfg SplitterConfig) int {
+	threshold := 50
+	if cfg.ChunkSize > 0 && cfg.ChunkSize/8 > threshold {
+		threshold = cfg.ChunkSize / 8
+	}
+	return threshold
+}
+
+func canMergeSemanticChunks(left, right Chunk, cfg SplitterConfig) bool {
+	if cfg.ChunkSize <= 0 {
+		return true
+	}
+	return len([]rune(left.Content))+len([]rune(right.Content)) <= cfg.ChunkSize
+}
+
+func mergeSemanticChunks(left, right Chunk) Chunk {
+	return Chunk{
+		Content: left.Content + right.Content,
+		Seq:     left.Seq,
+		Start:   left.Start,
+		End:     right.End,
+	}
 }
 
 func appendSemanticGroup(out []Chunk, runes []rune, start, end int, cfg SplitterConfig, seq *int) []Chunk {

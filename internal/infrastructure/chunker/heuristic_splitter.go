@@ -104,7 +104,7 @@ func splitByHeuristicsImpl(text string, cfg SplitterConfig, _ *DocProfile) []Chu
 	if curEnd > chunkStart {
 		out = appendChunk(out, runes, chunkStart, curEnd, &seq)
 	}
-	return out
+	return coalesceTinyHeuristicChunks(out, runes, cfg.ChunkSize)
 }
 
 // findHeuristicBoundaries scans text and returns boundary positions in
@@ -243,6 +243,7 @@ func appendChunk(out []Chunk, runes []rune, start, end int, seq *int) []Chunk {
 		return out
 	}
 	c := Chunk{Content: raw, Seq: *seq, Start: start, End: end}
+	populateStructuralMetadata(&c)
 	*seq++
 	return append(out, c)
 }
@@ -258,14 +259,109 @@ func appendOversizeBlock(out []Chunk, runes []rune, start, end int, cfg Splitter
 	subs := SplitText(subText, cfg)
 	for _, s := range subs {
 		out = append(out, Chunk{
-			Content: s.Content,
-			Seq:     *seq,
-			Start:   start + s.Start,
-			End:     start + s.End,
+			Content:   s.Content,
+			Seq:       *seq,
+			Start:     start + s.Start,
+			End:       start + s.End,
+			Tables:    s.Tables,
+			Formulas:  s.Formulas,
+			CodeBlocks: s.CodeBlocks,
+			Images:    s.Images,
+			Metadata:  s.Metadata,
 		})
 		*seq++
 	}
 	return out
+}
+
+// coalesceTinyHeuristicChunks merges chunks whose trimmed rune length is
+// below the tiny threshold (50 runes) into their nearest neighbor. This
+// eliminates meaningless fragments like "(2)", "因此", or a lone heading
+// that carry no retrievable semantic content on their own.
+//
+// For overlapping chunks (where next.Start < prev.End), the merged chunk
+// re-slices from the original runes array so Content stays a literal
+// document slice and the End-Start == runeCount invariant holds.
+//
+// The first and last chunks are never merged away — they anchor the
+// document boundary. Interior tiny chunks prefer the previous neighbor
+// when it can absorb them without exceeding chunkSize, otherwise the
+// next neighbor.
+// tinyChunkThreshold is the minimum trimmed rune length a chunk must have
+// to survive as a standalone chunk in the heuristic splitter. Interior
+// chunks below this threshold are coalesced into a neighbor.
+const tinyChunkThreshold = 50
+
+func coalesceTinyHeuristicChunks(chunks []Chunk, runes []rune, chunkSize int) []Chunk {
+	if len(chunks) <= 2 || chunkSize <= 0 {
+		return chunks
+	}
+
+	// Copy input to avoid mutating caller's slice.
+	out := make([]Chunk, len(chunks))
+	copy(out, chunks)
+
+	// Mark tiny interior chunks for merging.
+	merged := make([]bool, len(out))
+	for i := 1; i < len(out)-1; i++ {
+		trimmedLen := utf8.RuneCountInString(strings.TrimSpace(out[i].Content))
+		if trimmedLen < tinyChunkThreshold {
+			merged[i] = true
+		}
+	}
+
+	// Merge tiny chunks into neighbors. Walk left-to-right so each
+	// merge decision sees the already-merged state of the previous chunk.
+	// Consecutive tiny chunks that can't merge backward are accumulated
+	// and merged forward as a group into the next non-tiny chunk.
+	var result []Chunk
+	var tinyGroupStart int // rune start of the first tiny chunk in a forward-merge group
+	inTinyGroup := false
+	for i := 0; i < len(out); i++ {
+		if merged[i] {
+			// Try merging into the previous chunk in result.
+			if len(result) > 0 && !inTinyGroup {
+				prev := &result[len(result)-1]
+				newEnd := out[i].End
+				newLen := newEnd - prev.Start
+				if newLen <= chunkSize {
+					prev.End = newEnd
+					prev.Content = string(runes[prev.Start:newEnd])
+					populateStructuralMetadata(prev)
+					continue
+				}
+			}
+			// Can't merge backward — start or extend a forward-merge group.
+			if !inTinyGroup {
+				tinyGroupStart = out[i].Start
+				inTinyGroup = true
+			}
+			continue
+		}
+		// Non-tiny chunk: flush any accumulated tiny group by extending
+		// this chunk's start backward to cover the group.
+		if inTinyGroup {
+			out[i].Start = tinyGroupStart
+			out[i].Content = string(runes[out[i].Start:out[i].End])
+			populateStructuralMetadata(&out[i])
+			inTinyGroup = false
+		}
+		result = append(result, out[i])
+	}
+	// If a tiny group remains at the end (no non-tiny chunk follows),
+	// merge it into the last result chunk so content isn't lost.
+	if inTinyGroup && len(result) > 0 {
+		prev := &result[len(result)-1]
+		prev.End = out[len(out)-1].End
+		prev.Content = string(runes[prev.Start:prev.End])
+		populateStructuralMetadata(prev)
+	}
+
+	// Re-sequence.
+	for i := range result {
+		result[i].Seq = i
+	}
+	return result
 }
 
 // applyOverlapAligned returns the rune offset where the next chunk should

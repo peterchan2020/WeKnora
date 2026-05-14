@@ -30,8 +30,10 @@ func TestCoalesceTinySemanticChunks_DoesNotMutateInput(t *testing.T) {
 
 	_ = coalesceTinySemanticChunks(chunks, SplitterConfig{ChunkSize: 59})
 
-	if chunks[2] != originalNext {
-		t.Fatalf("coalescing should not mutate input slice: got %#v want %#v", chunks[2], originalNext)
+	if chunks[2].Content != originalNext.Content || chunks[2].Seq != originalNext.Seq || chunks[2].Start != originalNext.Start || chunks[2].End != originalNext.End {
+		t.Fatalf("coalescing should not mutate input slice: got Content=%q Seq=%d Start=%d End=%d want Content=%q Seq=%d Start=%d End=%d",
+			chunks[2].Content, chunks[2].Seq, chunks[2].Start, chunks[2].End,
+			originalNext.Content, originalNext.Seq, originalNext.Start, originalNext.End)
 	}
 }
 

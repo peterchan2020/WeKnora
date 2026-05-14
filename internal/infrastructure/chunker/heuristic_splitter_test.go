@@ -3,6 +3,7 @@ package chunker
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSplitByHeuristics_FormFeedBoundary(t *testing.T) {
@@ -175,4 +176,160 @@ func chunkLengths(chunks []Chunk) []int {
 		out[i] = len([]rune(c.Content))
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// coalesceTinyHeuristicChunks tests
+// ---------------------------------------------------------------------------
+
+func TestCoalesceTinyHeuristicChunks_MergesInteriorTinyChunks(t *testing.T) {
+	runes := []rune("AAAAAA(2)BBBBBB")
+	// Simulate chunks where chunk 1 is tiny: "(2)" = 4 runes
+	chunks := []Chunk{
+		{Content: "AAAAAA", Seq: 0, Start: 0, End: 6},
+		{Content: "(2)", Seq: 1, Start: 6, End: 9},
+		{Content: "BBBBBB", Seq: 2, Start: 9, End: 15},
+	}
+	result := coalesceTinyHeuristicChunks(chunks, runes, 512)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 chunks after coalescing, got %d", len(result))
+	}
+	// The tiny chunk should be merged into the previous chunk.
+	if result[0].Content != "AAAAAA(2)" {
+		t.Errorf("first chunk content = %q, want %q", result[0].Content, "AAAAAA(2)")
+	}
+	if result[0].Start != 0 || result[0].End != 9 {
+		t.Errorf("first chunk offsets = [%d,%d], want [0,9]", result[0].Start, result[0].End)
+	}
+	if result[1].Content != "BBBBBB" {
+		t.Errorf("second chunk content = %q, want %q", result[1].Content, "BBBBBB")
+	}
+}
+
+func TestCoalesceTinyHeuristicChunks_MergesForwardWhenPrevTooLarge(t *testing.T) {
+	runes := []rune(strings.Repeat("A", 200) + "(2)" + strings.Repeat("B", 10))
+	chunks := []Chunk{
+		{Content: strings.Repeat("A", 200), Seq: 0, Start: 0, End: 200},
+		{Content: "(2)", Seq: 1, Start: 200, End: 203},
+		{Content: strings.Repeat("B", 10), Seq: 2, Start: 203, End: 213},
+	}
+	result := coalesceTinyHeuristicChunks(chunks, runes, 200)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 chunks after coalescing, got %d", len(result))
+	}
+	// Tiny chunk can't merge backward (200+3 > 200), so it merges forward.
+	if !strings.Contains(result[1].Content, "(2)") {
+		t.Errorf("second chunk should contain the tiny fragment, got %q", result[1].Content)
+	}
+	if result[1].Start != 200 {
+		t.Errorf("second chunk Start = %d, want 200 (extended backward)", result[1].Start)
+	}
+}
+
+func TestCoalesceTinyHeuristicChunks_PreservesFirstAndLast(t *testing.T) {
+	runes := []rune("abBBBBBBcd")
+	chunks := []Chunk{
+		{Content: "ab", Seq: 0, Start: 0, End: 2},
+		{Content: "BBBBBB", Seq: 1, Start: 2, End: 8},
+		{Content: "cd", Seq: 2, Start: 8, End: 10},
+	}
+	result := coalesceTinyHeuristicChunks(chunks, runes, 512)
+	// First and last chunks should not be merged away even if tiny.
+	if len(result) < 2 {
+		t.Fatalf("expected at least 2 chunks, got %d", len(result))
+	}
+}
+
+func TestCoalesceTinyHeuristicChunks_OverlappingChunks(t *testing.T) {
+	// Simulate overlapping chunks where a tiny chunk overlaps with neighbors.
+	runes := []rune("AAAAAA_overlap_(2)_overlap_BBBBBB")
+	// chunk 0: runes[0:12], chunk 1 (tiny): runes[8:12], chunk 2: runes[8:30]
+	// Overlapping: chunk 1 starts inside chunk 0, chunk 2 starts inside chunk 1
+	chunks := []Chunk{
+		{Content: string(runes[0:12]), Seq: 0, Start: 0, End: 12},
+		{Content: string(runes[8:12]), Seq: 1, Start: 8, End: 12},
+		{Content: string(runes[8:30]), Seq: 2, Start: 8, End: 30},
+	}
+	result := coalesceTinyHeuristicChunks(chunks, runes, 512)
+	// Tiny chunk should be merged into previous.
+	if len(result) != 2 {
+		t.Fatalf("expected 2 chunks after coalescing, got %d", len(result))
+	}
+	// Verify rune-count invariant: End-Start == runeCount(Content)
+	for i, c := range result {
+		runeCount := utf8.RuneCountInString(c.Content)
+		if c.End-c.Start != runeCount {
+			t.Errorf("chunk %d: End-Start=%d but runeCount(Content)=%d", i, c.End-c.Start, runeCount)
+		}
+	}
+}
+
+func TestCoalesceTinyHeuristicChunks_DoesNotMutateInput(t *testing.T) {
+	runes := []rune("AAAAAA(2)BBBBBB")
+	chunks := []Chunk{
+		{Content: "AAAAAA", Seq: 0, Start: 0, End: 6},
+		{Content: "(2)", Seq: 1, Start: 6, End: 9},
+		{Content: "BBBBBB", Seq: 2, Start: 9, End: 15},
+	}
+	original := make([]Chunk, len(chunks))
+	copy(original, chunks)
+
+	_ = coalesceTinyHeuristicChunks(chunks, runes, 512)
+
+	for i := range chunks {
+		if chunks[i].Content != original[i].Content || chunks[i].Seq != original[i].Seq ||
+			chunks[i].Start != original[i].Start || chunks[i].End != original[i].End {
+			t.Fatalf("coalescing should not mutate input slice at index %d", i)
+		}
+	}
+}
+
+func TestCoalesceTinyHeuristicChunks_ReSequences(t *testing.T) {
+	runes := []rune("AAAAAA(2)BBBBBB(3)CCCCCC")
+	chunks := []Chunk{
+		{Content: "AAAAAA", Seq: 0, Start: 0, End: 6},
+		{Content: "(2)", Seq: 1, Start: 6, End: 9},
+		{Content: "BBBBBB", Seq: 2, Start: 9, End: 15},
+		{Content: "(3)", Seq: 3, Start: 15, End: 18},
+		{Content: "CCCCCC", Seq: 4, Start: 18, End: 24},
+	}
+	result := coalesceTinyHeuristicChunks(chunks, runes, 512)
+	for i, c := range result {
+		if c.Seq != i {
+			t.Errorf("chunk %d Seq = %d, want %d", i, c.Seq, i)
+		}
+	}
+}
+
+// Regression: consecutive tiny chunks that can't merge backward must all be
+// preserved by forward-merging into the next non-tiny chunk. The old code
+// silently dropped intermediate tiny chunks when more than one appeared in
+// a row.
+func TestCoalesceTinyHeuristicChunks_ConsecutiveTinyChunks(t *testing.T) {
+	// Layout: BIG | tiny | tiny | tiny | BIG
+	// The prev chunk is at chunkSize limit so tiny chunks can't merge backward.
+	big := strings.Repeat("A", 200)
+	runes := []rune(big + "x" + "y" + "z" + strings.Repeat("B", 200))
+	chunks := []Chunk{
+		{Content: big, Seq: 0, Start: 0, End: 200},
+		{Content: "x", Seq: 1, Start: 200, End: 201},
+		{Content: "y", Seq: 2, Start: 201, End: 202},
+		{Content: "z", Seq: 3, Start: 202, End: 203},
+		{Content: strings.Repeat("B", 200), Seq: 4, Start: 203, End: 403},
+	}
+	result := coalesceTinyHeuristicChunks(chunks, runes, 200)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 chunks after coalescing, got %d", len(result))
+	}
+	// The second chunk must contain "xyz" + "BBB..." — no content lost.
+	if !strings.Contains(result[1].Content, "xyz") {
+		t.Errorf("second chunk lost tiny group content, got %q", result[1].Content)
+	}
+	// Verify rune-count invariant.
+	for i, c := range result {
+		runeCount := utf8.RuneCountInString(c.Content)
+		if c.End-c.Start != runeCount {
+			t.Errorf("chunk %d: End-Start=%d but runeCount=%d", i, c.End-c.Start, runeCount)
+		}
+	}
 }

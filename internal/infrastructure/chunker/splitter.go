@@ -30,6 +30,16 @@ type Chunk struct {
 	Seq           int
 	Start         int
 	End           int
+
+	// Structural metadata extracted from Content after chunk assembly.
+	Tables     []TableElement
+	Formulas   []FormulaRef
+	CodeBlocks []CodeBlock
+	Images     []ImageRef
+
+	// Metadata holds backward-compatible summary counts and key fields
+	// for DB persistence (table_count, formula_count, etc.).
+	Metadata map[string]any
 }
 
 // EmbeddingContent returns the text that should be fed to the embedding
@@ -125,6 +135,10 @@ func DefaultConfig() SplitterConfig {
 // protectedPatterns are regex patterns for content that must not be split.
 var protectedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)\$\$.*?\$\$`),                                                               // LaTeX block math
+	regexp.MustCompile(`(?s)\\\[.*?\\\]`),                                                               // LaTeX display math
+	regexp.MustCompile(`(?s)\\\(.*?\\\)`),                                                               // LaTeX inline math
+	regexp.MustCompile(`(?s)(^|[^\\$])\$[^$\n]+?\$`),                                                    // LaTeX inline math
+	regexp.MustCompile(`(?s)\\begin\{[a-zA-Z]+\*?\}.*?\\end\{[a-zA-Z]+\*?\}`),                          // LaTeX environments
 	regexp.MustCompile(`!\[[^\]]*\]\([^)]+\)`),                                                          // Markdown images
 	regexp.MustCompile(`\[[^\]]*\]\([^)]+\)`),                                                           // Markdown links
 	regexp.MustCompile(`(?is)<table\b[^>]*>.*?</table>`),                                                // HTML tables
@@ -406,6 +420,13 @@ func buildUnitsWithProtection(text string, protected []span, separators []string
 
 		// If protected content is too large, forcibly split it
 		if protRuneLen > maxProtectedSize {
+			if codeUnits := splitFencedCodeUnitWithTreeSitter(protText, runePos, maxProtectedSize); len(codeUnits) > 0 {
+				units = append(units, codeUnits...)
+				runePos += protRuneLen
+				bytePos = p.end
+				continue
+			}
+
 			// Split into smaller chunks at line breaks or spaces
 			runes := []rune(protText)
 			offset := 0
@@ -490,12 +511,14 @@ func mergeUnits(units []splitUnit, chunkSize, chunkOverlap int) []Chunk {
 				chunkEnd := forcedSplitEnd(runes, offset, absoluteMaxSize)
 
 				chunkText := string(runes[offset:chunkEnd])
-				chunks = append(chunks, Chunk{
+				chunk := Chunk{
 					Content: chunkText,
 					Seq:     len(chunks),
 					Start:   u.start + offset,
 					End:     u.start + chunkEnd,
-				})
+				}
+				populateStructuralMetadata(&chunk)
+				chunks = append(chunks, chunk)
 				offset = chunkEnd
 			}
 			continue
@@ -617,12 +640,52 @@ func buildChunk(units []splitUnit, seq int) Chunk {
 	for _, u := range units {
 		sb.WriteString(u.text)
 	}
-	return Chunk{
-		Content: sb.String(),
+	content := sb.String()
+	chunk := Chunk{
+		Content: content,
 		Seq:     seq,
 		Start:   units[0].start,
 		End:     units[len(units)-1].end,
 	}
+	populateStructuralMetadata(&chunk)
+	return chunk
+}
+
+// populateStructuralMetadata extracts tables, formulas, code blocks, and
+// images from the chunk content and populates both the typed fields and the
+// Metadata map (for backward-compatible DB persistence).
+func populateStructuralMetadata(c *Chunk) {
+	tables := ExtractTableElements(c.Content)
+	formulas := ExtractFormulaRefs(c.Content)
+	codeBlocks := ExtractCodeBlocks(c.Content)
+	images := ExtractImageRefs(c.Content)
+
+	c.Tables = tables
+	c.Formulas = formulas
+	c.CodeBlocks = codeBlocks
+	c.Images = images
+
+	meta := make(map[string]any, 6)
+	meta["table_count"] = len(tables)
+	if len(tables) > 0 {
+		meta["table_summary"] = tableHeaderSummary(tables[0])
+		if len(tables[0].Columns) > 0 {
+			meta["table_columns"] = tables[0].Columns
+		}
+	}
+	meta["formula_count"] = len(formulas)
+	meta["code_block_count"] = len(codeBlocks)
+	meta["image_count"] = len(images)
+	c.Metadata = meta
+}
+
+// tableHeaderSummary returns the column names of a TableElement joined as a
+// pipe-delimited string. Used as a compact summary for the Metadata map.
+func tableHeaderSummary(t TableElement) string {
+	if len(t.Columns) == 0 {
+		return ""
+	}
+	return strings.Join(t.Columns, " | ")
 }
 
 // computeOverlap returns the units to keep for overlap and their total rune length.

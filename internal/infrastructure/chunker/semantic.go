@@ -286,12 +286,14 @@ func canMergeSemanticChunks(left, right Chunk, cfg SplitterConfig) bool {
 }
 
 func mergeSemanticChunks(left, right Chunk) Chunk {
-	return Chunk{
+	merged := Chunk{
 		Content: left.Content + right.Content,
 		Seq:     left.Seq,
 		Start:   left.Start,
 		End:     right.End,
 	}
+	populateStructuralMetadata(&merged)
+	return merged
 }
 
 func appendSemanticGroup(out []Chunk, runes []rune, start, end int, cfg SplitterConfig, seq *int) []Chunk {
@@ -303,7 +305,9 @@ func appendSemanticGroup(out []Chunk, runes []rune, start, end int, cfg Splitter
 		return out
 	}
 	if len([]rune(raw)) <= cfg.ChunkSize {
-		out = append(out, Chunk{Content: raw, Seq: *seq, Start: start, End: end})
+		chunk := Chunk{Content: raw, Seq: *seq, Start: start, End: end}
+		populateStructuralMetadata(&chunk)
+		out = append(out, chunk)
 		*seq++
 		return out
 	}
@@ -312,10 +316,15 @@ func appendSemanticGroup(out []Chunk, runes []rune, start, end int, cfg Splitter
 	subCfg.Strategy = StrategyLegacy
 	for _, sub := range SplitText(raw, subCfg) {
 		out = append(out, Chunk{
-			Content: sub.Content,
-			Seq:     *seq,
-			Start:   start + sub.Start,
-			End:     start + sub.End,
+			Content:   sub.Content,
+			Seq:       *seq,
+			Start:     start + sub.Start,
+			End:       start + sub.End,
+			Tables:    sub.Tables,
+			Formulas:  sub.Formulas,
+			CodeBlocks: sub.CodeBlocks,
+			Images:    sub.Images,
+			Metadata:  sub.Metadata,
 		})
 		*seq++
 	}

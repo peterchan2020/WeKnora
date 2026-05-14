@@ -343,9 +343,30 @@ func parsedChunksFromChunks(chunks []chunker.Chunk) []types.ParsedChunk {
 			Seq:           c.Seq,
 			Start:         c.Start,
 			End:           c.End,
+			Images:        imageRefsToParsedImages(c.Images),
 		}
 	}
 	return parsed
+}
+
+// imageRefsToParsedImages converts chunker.ImageRef slices to types.ParsedImage slices.
+// The OriginalRef in the chunked markdown is the provider:// URL (after ImageResolver
+// processing), which becomes both URL and OriginalURL in ParsedImage. Caption and OCRText
+// are left empty — they are populated later by multimodal processing.
+func imageRefsToParsedImages(refs []chunker.ImageRef) []types.ParsedImage {
+	if len(refs) == 0 {
+		return nil
+	}
+	images := make([]types.ParsedImage, len(refs))
+	for i, r := range refs {
+		images[i] = types.ParsedImage{
+			URL:         r.OriginalRef,
+			OriginalURL: r.OriginalRef,
+			Start:       r.Start,
+			End:         r.End,
+		}
+	}
+	return images
 }
 
 func parsedChunksFromChildren(children []chunker.ChildChunk) []types.ParsedChunk {
@@ -358,6 +379,7 @@ func parsedChunksFromChildren(children []chunker.ChildChunk) []types.ParsedChunk
 			Start:         c.Start,
 			End:           c.End,
 			ParentIndex:   c.ParentIndex,
+			Images:        imageRefsToParsedImages(c.Images),
 		}
 	}
 	return parsed
@@ -2573,13 +2595,32 @@ func (s *knowledgeService) enqueueImageMultimodalTasks(
 	}
 
 	for _, img := range images {
-		// Match image to the ParsedChunk whose content contains the image URL.
-		// ChunkID was populated by processChunks with the real DB UUID.
+		// Match image to the ParsedChunk using offset-driven binding.
+		// Each ParsedChunk.Images carries the provider:// URLs and byte offsets
+		// extracted by the chunker. We match StoredImage.ServingURL (provider://)
+		// against ParsedImage.URL/OriginalURL first, then fall back to substring
+		// matching on chunk Content, and finally fall back to the first chunk.
 		chunkID := ""
 		for _, c := range chunks {
-			if strings.Contains(c.Content, img.ServingURL) {
-				chunkID = c.ChunkID
+			for _, pi := range c.Images {
+				if pi.URL == img.ServingURL || pi.OriginalURL == img.ServingURL ||
+					pi.URL == img.OriginalRef || pi.OriginalURL == img.OriginalRef {
+					chunkID = c.ChunkID
+					break
+				}
+			}
+			if chunkID != "" {
 				break
+			}
+		}
+		// Fallback: substring match on chunk Content when the URL format
+		// differs between the resolver and the chunker.
+		if chunkID == "" {
+			for _, c := range chunks {
+				if strings.Contains(c.Content, img.ServingURL) || strings.Contains(c.Content, img.OriginalRef) {
+					chunkID = c.ChunkID
+					break
+				}
 			}
 		}
 		if chunkID == "" && len(chunks) > 0 {

@@ -85,13 +85,15 @@ func splitByHeadingsImpl(text string, cfg SplitterConfig, profile *DocProfile) [
 		// to preserve End-Start == len(Content) invariants relied on by
 		// document reconstruction (knowledge.go:2278+).
 		if bcLen+2+secLen <= cfg.ChunkSize {
-			out = append(out, Chunk{
+			chunk := Chunk{
 				Content:       sectionContent,
 				ContextHeader: breadcrumb,
 				Seq:           seq,
 				Start:         b.runeStart,
 				End:           endRune,
-			})
+			}
+			populateStructuralMetadata(&chunk)
+			out = append(out, chunk)
 			seq++
 			continue
 		}
@@ -102,13 +104,19 @@ func splitByHeadingsImpl(text string, cfg SplitterConfig, profile *DocProfile) [
 		// because the breadcrumb no longer counts against Content size.
 		subChunks := SplitText(sectionContent, cfg)
 		for _, sub := range subChunks {
-			out = append(out, Chunk{
+			chunk := Chunk{
 				Content:       sub.Content,
 				ContextHeader: breadcrumb,
 				Seq:           seq,
 				Start:         b.runeStart + sub.Start,
 				End:           b.runeStart + sub.End,
-			})
+				Tables:        sub.Tables,
+				Formulas:      sub.Formulas,
+				CodeBlocks:    sub.CodeBlocks,
+				Images:        sub.Images,
+				Metadata:      sub.Metadata,
+			}
+			out = append(out, chunk)
 			seq++
 		}
 	}
@@ -152,6 +160,7 @@ func coalesceTinyChunks(in []Chunk, chunkSize int) []Chunk {
 		if cur.End == next.Start && curLen < target && curLen+nextLen <= chunkSize {
 			cur.Content += next.Content
 			cur.ContextHeader = commonHeadingPrefix(cur.ContextHeader, next.ContextHeader)
+			populateStructuralMetadata(&cur)
 			cur.End = next.End
 			curLen += nextLen
 			continue

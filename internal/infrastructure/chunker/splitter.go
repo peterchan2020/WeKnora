@@ -314,18 +314,40 @@ func forcedSplitEnd(runes []rune, offset, maxSize int) int {
 	if tagSearchStart < offset+1 {
 		tagSearchStart = offset + 1
 	}
-	// Prefer splitting at </table> over </tr> so HTML tables stay
-	// structurally complete. Search the full window for </table> first.
-	for i := chunkEnd; i >= tagSearchStart; i-- {
-		if hasASCIITagSuffix(runes, offset, i, "</table>") {
-			return i
+
+	// When the region is much larger than maxSize (e.g. a 3000-char
+	// HTML table with maxSize=512), prefer splitting at </tr> so
+	// oversized tables are split by row rather than kept as one
+	// monolithic chunk. Only prefer </table> when the region is
+	// reasonably close to maxSize.
+	regionLen := chunkEnd - offset
+	preferTableRowSplit := regionLen > maxSize*3/2
+
+	if !preferTableRowSplit {
+		// Normal case: prefer </table> for structural completeness.
+		for i := chunkEnd; i >= tagSearchStart; i-- {
+			if hasASCIITagSuffix(runes, offset, i, "</table>") {
+				return i
+			}
 		}
 	}
+
+	// Split at row/list/paragraph boundaries.
 	for i := chunkEnd; i >= tagSearchStart; i-- {
 		if hasASCIITagSuffix(runes, offset, i, "</tr>") ||
 			hasASCIITagSuffix(runes, offset, i, "</li>") ||
 			hasASCIITagSuffix(runes, offset, i, "</p>") {
 			return i
+		}
+	}
+
+	// For oversized tables where row split was preferred, try </table>
+	// as a fallback if no </tr> was found.
+	if preferTableRowSplit {
+		for i := chunkEnd; i >= tagSearchStart; i-- {
+			if hasASCIITagSuffix(runes, offset, i, "</table>") {
+				return i
+			}
 		}
 	}
 
@@ -462,7 +484,7 @@ func splitOversizedRunes(runes []rune, chunkSize int) [][]rune {
 
 // findBestSplitPoint finds the best position to split runes[start:] into a
 // chunk of at most chunkSize runes. Prefers \n\n, then \n, then sentence
-// boundaries, then a hard cut.
+// boundaries (with abbreviation awareness), then a hard cut as last resort.
 func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 	maxEnd := start + chunkSize
 	if maxEnd >= len(runes) {
@@ -483,9 +505,12 @@ func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 		}
 	}
 
-	// Sentence boundary.
+	// Sentence boundary (primary: period/exclamation/question), excluding abbreviations.
 	for i := maxEnd; i > start+1; i-- {
-		if sentenceEndRunes[runes[i-1]] {
+		if primarySentenceEnd[runes[i-1]] {
+			if runes[i-1] == '.' && isAbbreviationDot(runes, i-1) {
+				continue
+			}
 			after := i
 			if after < len(runes) && unicode.IsSpace(runes[after]) {
 				return after
@@ -493,7 +518,7 @@ func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 		}
 	}
 
-	// Hard cut.
+	// Hard cut (last resort).
 	return maxEnd
 }
 
@@ -628,57 +653,104 @@ func attachFormulaContext(units []splitUnit, chunkSize int) []splitUnit {
 // dropped. This runs after mergeUnits so it handles overlap-based chunks
 // where coalesceTinyChunks (heading splitter) cannot merge due to
 // cur.End != next.Start.
+//
+// The function uses an accumulator for consecutive heading-only / near-empty /
+// very-small chunks so that chains like "# 7.4." → "# 7.6.4." → "7.6.4.2."
+// are all absorbed into the next real-content chunk rather than being merged
+// pair-wise and emitting tiny intermediate chunks.
 func coalesceOrphanHeadings(chunks []Chunk, chunkSize int) []Chunk {
 	if len(chunks) <= 1 || chunkSize <= 0 {
 		return chunks
 	}
 
+	verySmallThreshold := chunkSize / 4
+
 	out := make([]Chunk, 0, len(chunks))
+	// pendingHeadings accumulates consecutive heading-only, near-empty, or
+	// very-small chunks until a normal-size chunk is encountered.
+	var pendingHeadings []Chunk
+
+	isTiny := func(c Chunk) bool {
+		if _, ok := pureHeadingChunkHeader(c); ok {
+			return true
+		}
+		trimmed := strings.TrimSpace(c.Content)
+		trimmedLen := utf8.RuneCountInString(trimmed)
+		if trimmedLen < 10 {
+			return true
+		}
+		if utf8.RuneCountInString(c.Content) < verySmallThreshold {
+			return true
+		}
+		return false
+	}
+
+	flushPending := func(target *Chunk) {
+		if len(pendingHeadings) == 0 {
+			return
+		}
+		// Compute total heading text to decide Content vs ContextHeader.
+		var headingText []string
+		for _, ph := range pendingHeadings {
+			header, ok := pureHeadingChunkHeader(ph)
+			if ok && header != "" {
+				headingText = append(headingText, header)
+			} else {
+				headingText = append(headingText, strings.TrimSpace(ph.Content))
+			}
+		}
+		mergedHeader := strings.Join(headingText, "\n")
+		mergedContent := mergedHeader + "\n\n" + strings.TrimSpace(target.Content)
+		combinedLen := utf8.RuneCountInString(mergedContent)
+
+		if combinedLen <= chunkSize {
+			// Budget allows: prepend heading text into Content so it's
+			// retrievable by search.
+			target.Content = mergedContent
+			populateStructuralMetadata(target)
+		}
+		// Always promote heading context into ContextHeader (regardless of
+		// whether Content was merged) so breadcrumbs are complete.
+		target.ContextHeader = mergeBreadcrumbs(mergedHeader, target.ContextHeader)
+		pendingHeadings = nil
+	}
+
 	for i := 0; i < len(chunks); i++ {
 		c := chunks[i]
-		header, isHeading := pureHeadingChunkHeader(c)
-		if !isHeading {
+		if !isTiny(c) {
+			// Normal-size chunk: flush all accumulated headings into it.
+			flushPending(&c)
 			out = append(out, c)
 			continue
 		}
-		// Heading-only chunk: try to merge into next chunk.
-		if i < len(chunks)-1 {
-			next := chunks[i+1]
-			// Use untrimmed lengths for budget check to avoid the
-			// trimmed-length vs actual-content-length mismatch.
-			mergedContent := strings.TrimSpace(c.Content) + "\n\n" + strings.TrimSpace(next.Content)
-			combinedLen := utf8.RuneCountInString(mergedContent)
-			next.ContextHeader = mergeBreadcrumbs(header, next.ContextHeader)
-			if combinedLen <= chunkSize {
-				// Small enough to also merge Content — absorb heading text into
-				// next chunk so the title is visible in the chunk body.
-				next.Content = mergedContent
-				populateStructuralMetadata(&next)
-				out = append(out, next)
-				i++ // skip next since we already emitted it
-			} else {
-				// Too large to merge content — keep heading as ContextHeader only.
-				out = append(out, next)
-				i++ // skip next since we already emitted it
-			}
-			continue
-		}
-		// Last chunk is a heading: merge backward into the previous chunk
-		// in the output so the heading isn't orphaned at document end.
+		// Tiny chunk: accumulate.
+		pendingHeadings = append(pendingHeadings, c)
+	}
+
+	// Flush remaining pending headings backward into last output chunk.
+	if len(pendingHeadings) > 0 {
 		if len(out) > 0 {
-			prev := &out[len(out)-1]
-			prevLen := utf8.RuneCountInString(prev.Content)
-			headingLen := utf8.RuneCountInString(c.Content)
-			if prevLen+headingLen+2 <= chunkSize {
-				prev.Content = strings.TrimSpace(prev.Content) + "\n\n" + strings.TrimSpace(c.Content)
-				prev.End = c.End
-				populateStructuralMetadata(prev)
+			last := &out[len(out)-1]
+			var headingText []string
+			for _, ph := range pendingHeadings {
+				header, ok := pureHeadingChunkHeader(ph)
+				if ok && header != "" {
+					headingText = append(headingText, header)
+				} else {
+					headingText = append(headingText, strings.TrimSpace(ph.Content))
+				}
 			}
-			// If too large to merge, promote heading to prev's ContextHeader.
-			prev.ContextHeader = mergeBreadcrumbs(prev.ContextHeader, header)
+			mergedHeader := strings.Join(headingText, "\n")
+			mergedContent := strings.TrimSpace(last.Content) + "\n\n" + mergedHeader
+			combinedLen := utf8.RuneCountInString(mergedContent)
+			if combinedLen <= chunkSize {
+				last.Content = mergedContent
+				populateStructuralMetadata(last)
+			}
+			last.ContextHeader = mergeBreadcrumbs(last.ContextHeader, mergedHeader)
 		} else {
-			// No previous chunk to merge into — keep as-is.
-			out = append(out, c)
+			// No previous chunk to merge into — emit as-is.
+			out = append(out, pendingHeadings...)
 		}
 	}
 
@@ -690,8 +762,8 @@ func coalesceOrphanHeadings(chunks []Chunk, chunkSize int) []Chunk {
 }
 
 // sentenceEndRunes are the punctuation runes that mark a sentence boundary
-// when followed by whitespace or end-of-text. Used by snapFlushToSentenceBoundary
-// to avoid cutting chunks mid-sentence.
+// when followed by whitespace or end-of-text. Kept for backward compatibility
+// with callers that don't need the primary/secondary distinction.
 var sentenceEndRunes = map[rune]bool{
 	'.':  true,
 	'!':  true,
@@ -700,6 +772,74 @@ var sentenceEndRunes = map[rune]bool{
 	'！': true,
 	'？': true,
 	'；': true,
+}
+
+// primarySentenceEnd marks strong sentence-ending punctuation that almost
+// always terminates a sentence (period, exclamation, question mark in both
+// scripts). Used by findBestSplitPoint and snapRuneToSentenceEnd to prefer
+// these over weaker clause boundaries.
+var primarySentenceEnd = map[rune]bool{
+	'.':  true,
+	'!':  true,
+	'?':  true,
+	'。': true,
+	'！': true,
+	'？': true,
+}
+
+// clauseEndRunes marks clause-level punctuation where a split is acceptable
+// (though not ideal) when no primary sentence boundary is found. These are
+// used as a fallback tier in findBestSplitPoint and snapRuneToSentenceEnd.
+var clauseEndRunes = map[rune]bool{
+	',':  true,
+	';':  true,
+	':':  true,
+	'，': true,
+	'、': true,
+	'；': true,
+	'：': true,
+	'—':  true, // em dash (clause break)
+	'…':  true, // ellipsis (clause break)
+}
+
+// isAbbreviationDot returns true when the '.' at position i in runes is part
+// of a known abbreviation (e.g. "Fig.", "et al.", "vs.") and should NOT be
+// treated as a sentence-ending period. It looks backward from i to collect the
+// preceding word and checks against a common abbreviation set.
+func isAbbreviationDot(runes []rune, i int) bool {
+	if i <= 0 || runes[i] != '.' {
+		return false
+	}
+	// Collect the word preceding the dot (up to 10 runes back).
+	j := i - 1
+	for j >= 0 && j > i-11 {
+		r := runes[j]
+		if r == ' ' || r == '\n' || r == '\t' || r == ',' || r == ';' || r == ':' {
+			break
+		}
+		j--
+	}
+	word := strings.ToLower(string(runes[j+1 : i]))
+	return abbreviationSet[word]
+}
+
+// abbreviationSet contains common English abbreviations whose trailing period
+// should not be treated as a sentence boundary. Curated from academic paper
+// patterns observed in the WeKnora academic knowledge base.
+var abbreviationSet = map[string]bool{
+	"fig": true, "figs": true, "eq": true, "eqs": true,
+	"et al": true, "vs": true, "etc": true,
+	"i.e": true, "e.g": true, "cf": true, "al": true,
+	"dr": true, "prof": true, "mr": true, "mrs": true, "ms": true,
+	"no": true, "nos": true, "vol": true, "pp": true,
+	"ref": true, "refs": true, "sec": true, "sect": true,
+	"approx": true, "max": true, "min": true, "avg": true,
+	"dept": true, "univ": true, "inc": true, "ltd": true,
+	"ed": true, "eds": true, "rev": true, "est": true,
+	"jan": true, "feb": true, "mar": true, "apr": true,
+	"jun": true, "jul": true, "aug": true, "sep": true,
+	"sept": true, "oct": true, "nov": true, "dec": true,
+	"st": true, "nd": true, "rd": true, "th": true,
 }
 
 // snapFlushToSentenceBoundary tries to align the flush point of the current
@@ -723,13 +863,14 @@ func snapRuneToSentenceEnd(runes []rune, start, end, minSize int) int {
 		return end
 	}
 
-	// Search backward from end-1 for a sentence-ending rune.
+	// Pass 1: Search backward for a primary sentence-ending rune (.!?).
 	for i := end - 1; i > start; i-- {
-		if !sentenceEndRunes[runes[i]] {
+		if !primarySentenceEnd[runes[i]] {
 			continue
 		}
-		// Check that the sentence-ending rune is followed by whitespace,
-		// a closing quote/paren, or end-of-text.
+		if runes[i] == '.' && isAbbreviationDot(runes, i) {
+			continue
+		}
 		after := i + 1
 		if after < end {
 			r := runes[after]
@@ -737,22 +878,38 @@ func snapRuneToSentenceEnd(runes []rune, start, end, minSize int) int {
 				continue
 			}
 		}
-		// Advance past the sentence-ending rune and any trailing spaces
-		// on the same line. Stop before a newline (it belongs to the
-		// next sentence for clean separation).
 		boundary := after
 		for boundary < end && (runes[boundary] == ' ' || runes[boundary] == '\t') {
 			boundary++
 		}
-		// Ensure the snapped chunk is still at least minSize.
 		if boundary-start >= minSize {
 			return boundary
 		}
-		// Snapped position would be too small — don't snap, keep searching.
-		// (In practice this means the sentence is very long and we accept
-		// cutting it rather than producing a tiny chunk.)
 		break
 	}
+
+	// Pass 2: Fallback to clause boundaries (,;: etc.) when no primary found.
+	for i := end - 1; i > start; i-- {
+		if !clauseEndRunes[runes[i]] {
+			continue
+		}
+		after := i + 1
+		if after < end {
+			r := runes[after]
+			if !unicode.IsSpace(r) && r != '"' && r != '\'' && r != ')' && r != ']' && r != '}' && r != '’' && r != '”' {
+				continue
+			}
+		}
+		boundary := after
+		for boundary < end && (runes[boundary] == ' ' || runes[boundary] == '\t') {
+			boundary++
+		}
+		if boundary-start >= minSize {
+			return boundary
+		}
+		break
+	}
+
 	return end
 }
 
@@ -771,29 +928,26 @@ func snapFlushToSentenceBoundary(units []splitUnit, chunkSize int) ([]splitUnit,
 		maxLookback = 100
 	}
 
-	// Walk backward through units accumulating text. When we find a sentence
-	// boundary, record the split position. We keep the *last* (closest to end)
-	// sentence boundary within the lookback window.
 	accumulated := 0
 	type splitPoint struct {
-		unitIdx int   // index of the unit containing the boundary
-		runeOff int   // rune offset within that unit's text (after the boundary)
+		unitIdx int
+		runeOff int
 	}
 	var best splitPoint
 	bestSet := false
 
+	// Pass 1: primary sentence endings (.!?), excluding abbreviations.
 	for i := len(units) - 1; i >= 0 && accumulated < maxLookback; i-- {
 		runes := []rune(units[i].text)
 		accumulated += len(runes)
 
-		// Scan backward within this unit for a sentence-ending rune.
 		for j := len(runes) - 1; j >= 1; j-- {
-			if !sentenceEndRunes[runes[j]] {
+			if !primarySentenceEnd[runes[j]] {
 				continue
 			}
-			// Sentence boundary: the end-rune must be followed by whitespace
-			// or be the last rune in the unit (next unit starts with whitespace
-			// or uppercase), or followed by a closing quote/paren.
+			if runes[j] == '.' && isAbbreviationDot(runes, j) {
+				continue
+			}
 			after := j + 1
 			if after < len(runes) {
 				r := runes[after]
@@ -801,27 +955,46 @@ func snapFlushToSentenceBoundary(units []splitUnit, chunkSize int) ([]splitUnit,
 					continue
 				}
 			}
-			// Boundary found: split after the sentence-ending rune (and any
-			// trailing whitespace on the same line, to keep the newline at the
-			// start of the next unit for clean separation).
 			splitAt := after
-			// Consume trailing spaces on the same line — but not the newline
-			// itself, which belongs to the next sentence.
 			for splitAt < len(runes) && (runes[splitAt] == ' ' || runes[splitAt] == '\t') {
 				splitAt++
 			}
-			if splitAt < len(runes) && runes[splitAt] == '\n' {
-				// Keep the newline with the next chunk for cleaner separation.
-				// Don't advance splitAt past the newline.
-			}
-
 			if splitAt > 0 && splitAt < len(runes) {
 				best = splitPoint{unitIdx: i, runeOff: splitAt}
 				bestSet = true
 			}
-			// We found a boundary in this unit; no need to scan further back
-			// within it. But we continue to other units to find a closer one.
 			break
+		}
+	}
+
+	// Pass 2: clause-level fallback (,;: etc.) when no primary found.
+	if !bestSet {
+		accumulated = 0
+		for i := len(units) - 1; i >= 0 && accumulated < maxLookback; i-- {
+			runes := []rune(units[i].text)
+			accumulated += len(runes)
+
+			for j := len(runes) - 1; j >= 1; j-- {
+				if !clauseEndRunes[runes[j]] {
+					continue
+				}
+				after := j + 1
+				if after < len(runes) {
+					r := runes[after]
+					if !unicode.IsSpace(r) && r != '"' && r != '\'' && r != ')' && r != ']' && r != '}' && r != '’' && r != '”' {
+						continue
+					}
+				}
+				splitAt := after
+				for splitAt < len(runes) && (runes[splitAt] == ' ' || runes[splitAt] == '\t') {
+					splitAt++
+				}
+				if splitAt > 0 && splitAt < len(runes) {
+					best = splitPoint{unitIdx: i, runeOff: splitAt}
+					bestSet = true
+				}
+				break
+			}
 		}
 	}
 
@@ -829,9 +1002,7 @@ func snapFlushToSentenceBoundary(units []splitUnit, chunkSize int) ([]splitUnit,
 		return units, nil
 	}
 
-	// Split at the recorded position: units[:best.unitIdx] + prefix of
-	// units[best.unitIdx] stay in the current chunk; suffix of
-	// units[best.unitIdx] + units[best.unitIdx+1:] carry over.
+	// Split at the recorded position.
 	su := units[best.unitIdx]
 	runes := []rune(su.text)
 	prefix := string(runes[:best.runeOff])

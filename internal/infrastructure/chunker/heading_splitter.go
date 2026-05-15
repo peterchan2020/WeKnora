@@ -6,6 +6,7 @@ package chunker
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -66,6 +67,59 @@ func splitByHeadingsStructured(text string, cfg SplitterConfig, profile *DocProf
 
 	bounds := findHeadingBoundaries(text, primaryLevel)
 	if len(bounds) <= 1 {
+		// Single heading at the top (or no heading). For small ChunkSize
+		// (child splitting), emit the entire content as one chunk so the
+		// heading stays with its body. If oversized, split via legacy but
+		// attach the heading to the first chunk's ContextHeader.
+		if cfg.ChunkSize < 500 {
+			if utf8.RuneCountInString(text) <= cfg.ChunkSize {
+				// Heading-only section: no retrievable body content. Skip
+				// emitting — the parent already carries this heading context.
+				if isHeadingOnlySection(text) {
+					return nil
+				}
+				bc := ""
+				if len(bounds) == 1 && bounds[0].line != "" {
+					line := bounds[0].line
+					if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
+						line = normalized
+					}
+					m := MarkdownHeadingPattern.FindStringSubmatch(line)
+					if m != nil {
+						bc = strings.Repeat("#", len(m[1])) + " " + strings.TrimSpace(m[2])
+					} else if NumberedSectionPattern.MatchString(line) {
+						bc = line
+					}
+				}
+				return []Chunk{{
+					Content:       text,
+					ContextHeader: bc,
+					Seq:           0,
+					Start:         0,
+					End:           utf8.RuneCountInString(text),
+				}}
+			}
+			// Oversized single-heading content: split via legacy, attach
+			// heading to first chunk's ContextHeader.
+			subChunks := SplitText(text, cfg)
+			if len(bounds) == 1 && bounds[0].line != "" {
+				line := bounds[0].line
+				if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
+					line = normalized
+				}
+				m := MarkdownHeadingPattern.FindStringSubmatch(line)
+				var bc string
+				if m != nil {
+					bc = strings.Repeat("#", len(m[1])) + " " + strings.TrimSpace(m[2])
+				} else if NumberedSectionPattern.MatchString(line) {
+					bc = line
+				}
+				if bc != "" && len(subChunks) > 0 {
+					subChunks[0].ContextHeader = mergeBreadcrumbs(bc, subChunks[0].ContextHeader)
+				}
+			}
+			return coalesceOrphanHeadings(coalesceTinyChunks(subChunks, cfg.ChunkSize), cfg.ChunkSize)
+		}
 		return SplitText(text, cfg)
 	}
 
@@ -100,6 +154,35 @@ func splitByHeadingsStructured(text string, cfg SplitterConfig, profile *DocProf
 		secLen := len(sectionRunes)
 		if secLen == 0 {
 			continue
+		}
+
+		// Section body guard: for small ChunkSize (typical in child
+		// splitting), skip emitting a section as a standalone chunk when
+		// it has less than minSectionBody chars of non-heading content.
+		// The heading will be absorbed by coalesceOrphanHeadings into
+		// the adjacent section instead, preventing isolated heading-only
+		// tiny chunks.
+		const minSectionBody = 50
+		if cfg.ChunkSize < 500 {
+			// Check how much non-heading content this section has.
+			nonHeadingLen := 0
+			for _, line := range strings.Split(sectionContent, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				ml := line
+				if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
+					ml = normalized
+				}
+				if MarkdownHeadingPattern.MatchString(ml) || NumberedSectionPattern.MatchString(ml) {
+					continue
+				}
+				nonHeadingLen += utf8.RuneCountInString(line)
+			}
+			if nonHeadingLen < minSectionBody {
+				continue // skip — heading gets absorbed by coalesceOrphanHeadings
+			}
 		}
 
 		bcLen := utf8.RuneCountInString(breadcrumb)
@@ -213,7 +296,7 @@ func coalesceTinyChunks(in []Chunk, chunkSize int) []Chunk {
 			continue
 		}
 		// Adjacent + still-small + would not blow the size budget → merge.
-		if cur.End == next.Start && curLen < target && curLen+nextLen <= chunkSize {
+		if curLen < target && curLen+nextLen <= chunkSize {
 			cur.Content += next.Content
 			cur.ContextHeader = commonHeadingPrefix(cur.ContextHeader, next.ContextHeader)
 			populateStructuralMetadata(&cur)
@@ -227,11 +310,76 @@ func coalesceTinyChunks(in []Chunk, chunkSize int) []Chunk {
 	}
 	out = append(out, cur)
 
+	// Filter near-empty chunks (<10 trimmed chars) by merging into neighbors.
+	out = coalesceNearEmptyChunks(out, chunkSize)
+
 	// Re-sequence — downstream code (knowledge.go) expects Seq to be a dense
 	// 0..N-1 range over the returned slice.
 	for i := range out {
 		out[i].Seq = i
 	}
+	return out
+}
+
+// artifactPattern matches pure-number or uppercase-label patterns that are
+// PDF numbering artifacts with no retrievable semantic content, e.g.
+// "7.6.4.2.", "7.6.5.", "TABLE IV.", "FIG. 3.".
+var artifactPattern = regexp.MustCompile(`^[\d.]+\s*$|^TABLE\s+\w+\.?\s*$|^FIG\.?\s*\w+\.?\s*$`)
+
+// coalesceNearEmptyChunks merges chunks with fewer than 10 trimmed characters
+// (or fewer than 20 for artifact patterns like "7.6.4.2." or "TABLE IV.")
+// into their nearest neighbor. These are typically PDF artifacts that carry
+// no retrievable semantic content on their own.
+func coalesceNearEmptyChunks(chunks []Chunk, chunkSize int) []Chunk {
+	if len(chunks) <= 2 || chunkSize <= 0 {
+		return chunks
+	}
+	const nearEmptyThreshold = 10
+	const artifactThreshold = 20
+
+	isNearEmpty := func(c Chunk) (bool, string) {
+		trimmed := strings.TrimSpace(c.Content)
+		trimmedLen := utf8.RuneCountInString(trimmed)
+		if trimmedLen >= artifactThreshold {
+			return false, trimmed
+		}
+		// Artifact patterns get a higher threshold (20 instead of 10).
+		if trimmedLen >= nearEmptyThreshold && trimmedLen < artifactThreshold {
+			if artifactPattern.MatchString(trimmed) {
+				return true, trimmed
+			}
+			return false, trimmed
+		}
+		if trimmedLen < nearEmptyThreshold {
+			return true, trimmed
+		}
+		return false, trimmed
+	}
+
+	out := make([]Chunk, 0, len(chunks))
+	for _, c := range chunks {
+		empty, trimmed := isNearEmpty(c)
+		if !empty {
+			out = append(out, c)
+			continue
+		}
+		// Near-empty chunk: merge into previous or next neighbor.
+		if len(out) > 0 {
+			prev := &out[len(out)-1]
+			prevLen := utf8.RuneCountInString(prev.Content)
+			chunkLen := utf8.RuneCountInString(c.Content)
+			if prevLen+chunkLen+2 <= chunkSize {
+				prev.Content = strings.TrimSpace(prev.Content) + "\n" + trimmed
+				prev.End = c.End
+				populateStructuralMetadata(prev)
+				continue
+			}
+		}
+		// Can't merge backward — keep as-is (will be picked up by
+		// coalesceOrphanHeadings or the heuristic coalescer).
+		out = append(out, c)
+	}
+
 	return out
 }
 
@@ -283,6 +431,27 @@ func pureHeadingChunkHeader(chunk Chunk) (string, bool) {
 	}
 	// Numbered section without # prefix: return as-is for context.
 	return headingLine, true
+}
+
+// isHeadingOnlySection returns true when the section contains no retrievable
+// body content — just Markdown headings, numbered sections, or blank lines.
+// Used by splitByHeadingsStructured to skip emitting tiny heading-only chunks.
+func isHeadingOnlySection(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		ml := line
+		if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
+			ml = normalized
+		}
+		if MarkdownHeadingPattern.MatchString(ml) || NumberedSectionPattern.MatchString(ml) {
+			continue
+		}
+		return false // found non-heading content
+	}
+	return true
 }
 
 // commonHeadingPrefix returns the longest line-aligned prefix shared by two

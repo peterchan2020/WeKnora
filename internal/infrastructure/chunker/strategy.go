@@ -56,7 +56,8 @@ func splitWithOptionalSemantic(ctx context.Context, text string, cfg SplitterCon
 	// package default). This improves quality for dense academic PDFs while
 	// respecting intentional configuration.
 	if profile != nil && profile.IsAcademic && profile.RecommendedChunkSize > 0 &&
-		cfg.Strategy == StrategyAuto && cfg.ChunkSize == DefaultChunkSize {
+		cfg.Strategy == StrategyAuto &&
+		cfg.ChunkSize == DefaultChunkSize {
 		cfg.ChunkSize = profile.RecommendedChunkSize
 	}
 	totalChars := len([]rune(text))

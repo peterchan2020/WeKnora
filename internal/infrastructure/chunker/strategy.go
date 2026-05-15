@@ -50,6 +50,15 @@ func splitWithOptionalSemantic(ctx context.Context, text string, cfg SplitterCon
 	}
 	cfg = ensureDefaults(cfg)
 	chain, profile := resolveChainWithProfile(text, cfg)
+	// When the profiler detects an academic document and recommends a larger
+	// ChunkSize, use it only if the user hasn't explicitly overridden the
+	// default (i.e. the strategy is "auto" and ChunkSize is still at the
+	// package default). This improves quality for dense academic PDFs while
+	// respecting intentional configuration.
+	if profile != nil && profile.IsAcademic && profile.RecommendedChunkSize > 0 &&
+		cfg.Strategy == StrategyAuto && cfg.ChunkSize == DefaultChunkSize {
+		cfg.ChunkSize = profile.RecommendedChunkSize
+	}
 	totalChars := len([]rune(text))
 
 	var lastOut []Chunk

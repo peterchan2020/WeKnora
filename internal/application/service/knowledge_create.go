@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"mime/multipart"
 	"net/url"
 	"os"
@@ -1057,7 +1058,7 @@ func sanitizeManualDownloadFilename(title string) string {
 func (s *knowledgeService) triggerManualProcessing(ctx context.Context,
 	kb *types.KnowledgeBase, knowledge *types.Knowledge, content string, doSync bool,
 ) {
-	clean := strings.TrimSpace(content)
+	clean := html.UnescapeString(strings.TrimSpace(content))
 	if clean == "" {
 		return
 	}

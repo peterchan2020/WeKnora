@@ -5,7 +5,10 @@
 // accepted so we don't oscillate between tiers.
 package chunker
 
-import "math"
+import (
+	"math"
+	"strings"
+)
 
 // ValidationResult captures the verdict and reason for a chunk-set.
 type ValidationResult struct {
@@ -46,15 +49,20 @@ func ValidateChunks(chunks []Chunk, totalChars, chunkSize int) ValidationResult 
 	// All but the last chunk should carry meaningful content. We allow the
 	// last chunk to be tiny because tail residue is normal.
 	tinyCount := 0
+	tinyThreshold := 100
+	if chunkSize > 0 && chunkSize/3 > tinyThreshold {
+		tinyThreshold = chunkSize / 3
+	}
 	for i, c := range chunks {
 		if i == len(chunks)-1 {
 			continue
 		}
-		if len([]rune(c.Content)) < 50 {
+		trimmedLen := len([]rune(strings.TrimSpace(c.Content)))
+		if trimmedLen < tinyThreshold {
 			tinyCount++
 		}
 	}
-	if tinyCount > len(chunks)/4 && tinyCount > 2 {
+	if tinyCount > len(chunks)/5 && tinyCount > 3 {
 		return ValidationResult{Reason: "too many tiny chunks"}
 	}
 
@@ -68,6 +76,21 @@ func ValidateChunks(chunks []Chunk, totalChars, chunkSize int) ValidationResult 
 	// red flag — the splitter ignored its size budget.
 	if maxLen > 2*chunkSize && chunkSize > 0 {
 		return ValidationResult{Reason: "chunk exceeds 2x target size"}
+	}
+
+	// Detect excessive offset overlap between consecutive chunks. A small
+	// overlap (ChunkOverlap) is expected, but overlaps exceeding 50% of a
+	// chunk's content indicate broken offset bookkeeping.
+	for i := 1; i < len(chunks); i++ {
+		prev := chunks[i-1]
+		cur := chunks[i]
+		if cur.Start < prev.End {
+			overlap := prev.End - cur.Start
+			prevLen := prev.End - prev.Start
+			if prevLen > 0 && overlap > prevLen/2 {
+				return ValidationResult{Reason: "excessive offset overlap between consecutive chunks"}
+			}
+		}
 	}
 
 	_ = avg

@@ -96,7 +96,7 @@ func splitByHeadingsStructured(text string, cfg SplitterConfig, profile *DocProf
 		observeSubHeadings(runes[b.runeStart:endRune], primaryLevel, hierarchy)
 
 		sectionRunes := runes[b.runeStart:endRune]
-		sectionContent := string(sectionRunes)
+		sectionContent := NormalizeStickyHeadingsInText(string(sectionRunes))
 		secLen := len(sectionRunes)
 		if secLen == 0 {
 			continue
@@ -158,7 +158,7 @@ func splitByHeadingsStructured(text string, cfg SplitterConfig, profile *DocProf
 		}
 	}
 
-	return coalesceTinyChunks(out, cfg.ChunkSize)
+	return coalesceOrphanHeadings(coalesceTinyChunks(out, cfg.ChunkSize), cfg.ChunkSize)
 }
 
 // coalesceTinyChunks merges adjacent small chunks under their shared heading
@@ -181,7 +181,7 @@ func coalesceTinyChunks(in []Chunk, chunkSize int) []Chunk {
 	if len(in) <= 1 || chunkSize <= 0 {
 		return in
 	}
-	target := chunkSize / 2
+	target := chunkSize / 3
 	if target < 200 {
 		target = 200
 	}
@@ -194,7 +194,20 @@ func coalesceTinyChunks(in []Chunk, chunkSize int) []Chunk {
 		next := in[i]
 		nextLen := utf8.RuneCountInString(next.Content)
 		if header, ok := pureHeadingChunkHeader(cur); ok && cur.End == next.Start {
+			// Heading-only chunk absorbs the next chunk: merge the heading
+			// into the next chunk's ContextHeader so the title is never orphaned.
+			// Always merge when combined length fits within ChunkSize, regardless
+			// of whether the next chunk is above target.
+			if curLen+nextLen <= chunkSize {
+				next.ContextHeader = mergeBreadcrumbs(header, next.ContextHeader)
+				cur = next
+				curLen = nextLen
+				continue
+			}
+			// Too large to merge content — still promote heading to ContextHeader
+			// so the next chunk carries the title context even if content stays separate.
 			next.ContextHeader = mergeBreadcrumbs(header, next.ContextHeader)
+			out = append(out, cur)
 			cur = next
 			curLen = nextLen
 			continue
@@ -224,20 +237,38 @@ func coalesceTinyChunks(in []Chunk, chunkSize int) []Chunk {
 
 func pureHeadingChunkHeader(chunk Chunk) (string, bool) {
 	trimmed := strings.TrimSpace(chunk.Content)
-	if trimmed == "" || strings.Contains(trimmed, "\n") {
+	if trimmed == "" {
 		return "", false
 	}
-	line := trimmed
-	if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
-		line = normalized
+	// Accept multi-line chunks where every non-blank line is a heading.
+	// This handles PDF-extracted headings like "# 1Introduction\n\n"
+	// which have a heading line plus trailing blank lines.
+	headingLine := ""
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		matchLine := line
+		if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
+			matchLine = normalized
+		}
+		m := MarkdownHeadingPattern.FindStringSubmatch(matchLine)
+		if m == nil {
+			return "", false // non-heading content found
+		}
+		if headingLine != "" {
+			return "", false // multiple heading lines — not a pure heading chunk
+		}
+		headingLine = matchLine
 	}
-	m := MarkdownHeadingPattern.FindStringSubmatch(line)
-	if m == nil {
+	if headingLine == "" {
 		return "", false
 	}
 	if chunk.ContextHeader != "" {
 		return chunk.ContextHeader, true
 	}
+	m := MarkdownHeadingPattern.FindStringSubmatch(headingLine)
 	return strings.Repeat("#", len(m[1])) + " " + strings.TrimSpace(m[2]), true
 }
 

@@ -314,6 +314,13 @@ func forcedSplitEnd(runes []rune, offset, maxSize int) int {
 	if tagSearchStart < offset+1 {
 		tagSearchStart = offset + 1
 	}
+	// Prefer splitting at </table> over </tr> so HTML tables stay
+	// structurally complete. Search the full window for </table> first.
+	for i := chunkEnd; i >= tagSearchStart; i-- {
+		if hasASCIITagSuffix(runes, offset, i, "</table>") {
+			return i
+		}
+	}
 	for i := chunkEnd; i >= tagSearchStart; i-- {
 		if hasASCIITagSuffix(runes, offset, i, "</tr>") ||
 			hasASCIITagSuffix(runes, offset, i, "</li>") ||
@@ -379,8 +386,18 @@ func SplitText(text string, cfg SplitterConfig) []Chunk {
 	// separators to oversize pieces (Python-parity recursive split).
 	units := buildUnitsWithProtection(text, protected, separators, chunkSize)
 
+	// Step 2b: Attach short preceding text to formula units so formulas are never
+	// isolated from their explanatory context.
+	units = attachFormulaContext(units, chunkSize)
+
 	// Step 3: Merge units into chunks with overlap
-	return mergeUnits(units, chunkSize, chunkOverlap)
+	chunks := mergeUnits(units, chunkSize, chunkOverlap)
+
+	// Step 3b: Merge heading-only chunks into their next neighbor so titles
+	// are never orphaned as standalone fragments.
+	chunks = coalesceOrphanHeadings(chunks, chunkSize)
+
+	return chunks
 }
 
 // buildUnitsWithProtection splits text into units, preserving protected spans as atomic.
@@ -469,6 +486,88 @@ func buildUnitsWithProtection(text string, protected []span, separators []string
 	}
 
 	return units
+}
+
+// formulaPattern matches text that looks like a LaTeX math formula (block or
+// display math). Used by attachFormulaContext to identify formula units.
+var formulaPattern = regexp.MustCompile(`(?s)^\s*\$\$.*\$\$\s*$|^\s*\\\[.*\\\]\s*$|^\s*\\begin\{[a-zA-Z]+\*?\}.*\\end\{[a-zA-Z]+\*?\}\s*$`)
+
+// attachFormulaContext merges a short preceding text unit into a formula unit
+// so that formulas are never isolated from their explanatory context. When a
+// formula unit is preceded by a text unit shorter than 200 runes and the
+// combined length fits within chunkSize, the two units are merged into one.
+func attachFormulaContext(units []splitUnit, chunkSize int) []splitUnit {
+	if len(units) <= 1 || chunkSize <= 0 {
+		return units
+	}
+	maxContext := 200
+	out := make([]splitUnit, 0, len(units))
+	out = append(out, units[0])
+	for i := 1; i < len(units); i++ {
+		prev := out[len(out)-1]
+		cur := units[i]
+		prevLen := runeLen(prev.text)
+		curLen := runeLen(cur.text)
+		if formulaPattern.MatchString(cur.text) && prevLen <= maxContext && prevLen+curLen <= chunkSize && prev.end == cur.start {
+			// Merge: the preceding short text becomes part of the formula unit.
+			merged := splitUnit{
+				text:  prev.text + cur.text,
+				start: prev.start,
+				end:   cur.end,
+			}
+			out[len(out)-1] = merged
+			continue
+		}
+		out = append(out, cur)
+	}
+	return out
+}
+
+// coalesceOrphanHeadings merges heading-only chunks with their next neighbor
+// so that standalone title fragments (e.g. "# 4.4Boosting Models with top-$k$
+// Sampling" produced by PDF extraction) are never orphaned. When a chunk
+// contains only a heading line (plus optional blank lines), the heading text
+// is promoted to the next chunk's ContextHeader and the orphan chunk is
+// dropped. This runs after mergeUnits so it handles overlap-based chunks
+// where coalesceTinyChunks (heading splitter) cannot merge due to
+// cur.End != next.Start.
+func coalesceOrphanHeadings(chunks []Chunk, chunkSize int) []Chunk {
+	if len(chunks) <= 1 || chunkSize <= 0 {
+		return chunks
+	}
+
+	out := make([]Chunk, 0, len(chunks))
+	for i := 0; i < len(chunks); i++ {
+		c := chunks[i]
+		header, isHeading := pureHeadingChunkHeader(c)
+		if !isHeading || i >= len(chunks)-1 {
+			out = append(out, c)
+			continue
+		}
+		// Heading-only chunk: merge into next chunk's ContextHeader.
+		next := chunks[i+1]
+		combinedLen := utf8.RuneCountInString(strings.TrimSpace(c.Content)) +
+			utf8.RuneCountInString(strings.TrimSpace(next.Content))
+		next.ContextHeader = mergeBreadcrumbs(header, next.ContextHeader)
+		if combinedLen <= chunkSize {
+			// Small enough to also merge Content — absorb heading text into
+			// next chunk so the title is visible in the chunk body.
+			next.Content = strings.TrimSpace(c.Content) + "\n\n" + strings.TrimSpace(next.Content)
+			populateStructuralMetadata(&next)
+			out = append(out, next)
+			i++ // skip next since we already emitted it
+		} else {
+			// Too large to merge content — keep heading as ContextHeader only.
+			out = append(out, next)
+			i++ // skip next since we already emitted it
+		}
+	}
+
+	// Re-sequence.
+	for i := range out {
+		out[i].Seq = i
+	}
+	return out
 }
 
 // mergeUnits combines split units into chunks with overlap tracking.
@@ -639,7 +738,7 @@ func buildChunk(units []splitUnit, seq int) Chunk {
 	for _, u := range units {
 		sb.WriteString(u.text)
 	}
-	content := sb.String()
+	content := NormalizeStickyHeadingsInText(sb.String())
 	chunk := Chunk{
 		Content: content,
 		Seq:     seq,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"slices"
 	"sort"
@@ -2441,7 +2442,8 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 		processOpts.Metadata = convertResult.Metadata
 	}
 
-	chunks, parentChunks := s.splitKnowledgeContent(ctx, kb, convertResult.MarkdownContent)
+	markdownContent := html.UnescapeString(convertResult.MarkdownContent)
+	chunks, parentChunks := s.splitKnowledgeContent(ctx, kb, markdownContent)
 	processOpts.ParentChunks = parentChunks
 	if kb.ChunkingConfig.EnableParentChild {
 		logger.Infof(ctx, "Split document into %d parent + %d child chunks for knowledge %s",

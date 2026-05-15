@@ -90,9 +90,9 @@ func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile,
 	seq := 0
 	chunkStart := bounds[0].runeStart
 	curEnd := chunkStart
-	minChunkSize := cfg.ChunkSize / 4
-	if minChunkSize < 50 {
-		minChunkSize = 50
+	minChunkSize := cfg.ChunkSize / 3
+	if minChunkSize < 100 {
+		minChunkSize = 100
 	}
 
 	for i := 1; i < len(bounds); i++ {
@@ -135,7 +135,7 @@ func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile,
 	if curEnd > chunkStart {
 		out = appendChunk(out, runes, chunkStart, curEnd, &seq)
 	}
-	return coalesceTinyHeuristicChunks(out, runes, cfg.ChunkSize)
+	return coalesceOrphanHeadings(groupReferenceEntries(coalesceTinyHeuristicChunks(out, runes, cfg.ChunkSize), runes, cfg.ChunkSize), cfg.ChunkSize)
 }
 
 func shouldPreserveParagraphBlocks(cfg SplitterConfig) bool {
@@ -364,7 +364,7 @@ func appendChunk(out []Chunk, runes []rune, start, end int, seq *int) []Chunk {
 	if strings.TrimSpace(raw) == "" {
 		return out
 	}
-	c := Chunk{Content: raw, Seq: *seq, Start: start, End: end}
+	c := Chunk{Content: NormalizeStickyHeadingsInText(raw), Seq: *seq, Start: start, End: end}
 	populateStructuralMetadata(&c)
 	*seq++
 	return append(out, c)
@@ -413,9 +413,9 @@ func appendOversizeBlock(out []Chunk, runes []rune, start, end int, cfg Splitter
 // to survive as a standalone chunk in the heuristic splitter. Interior chunks
 // below this threshold are coalesced into a neighbor.
 func tinyHeuristicThreshold(chunkSize int) int {
-	threshold := 50
-	if chunkSize > 0 && chunkSize/4 > threshold {
-		threshold = chunkSize / 4
+	threshold := 100
+	if chunkSize > 0 && chunkSize/3 > threshold {
+		threshold = chunkSize / 3
 	}
 	return threshold
 }
@@ -535,4 +535,93 @@ func applyOverlapAligned(runes []rune, curEnd, overlap int, bounds []boundary) i
 		}
 	}
 	return target
+}
+
+// groupReferenceEntries merges consecutive tiny chunks that belong to a
+// reference/bibliography section into larger groups of up to chunkSize. A
+// chunk is considered a reference entry if its content starts with a pattern
+// matching ReferenceEntryPattern (e.g. "[1] Author..." or "1. Author...").
+// The function scans for the first chunk whose ContextHeader or Content
+// indicates a reference section, then groups subsequent entry chunks until
+// the accumulated size reaches chunkSize.
+func groupReferenceEntries(chunks []Chunk, runes []rune, chunkSize int) []Chunk {
+	if len(chunks) <= 2 || chunkSize <= 0 {
+		return chunks
+	}
+
+	// Find the start of a reference section by checking ContextHeader or
+	// Content for reference section markers.
+	refStart := -1
+	for i, c := range chunks {
+		if ReferenceSectionPattern.MatchString(c.Content) || ReferenceSectionPattern.MatchString(c.ContextHeader) {
+			refStart = i
+			break
+		}
+	}
+	if refStart < 0 {
+		return chunks
+	}
+
+	// The reference section heading chunk itself stays standalone.
+	// Group subsequent chunks that look like reference entries.
+	out := make([]Chunk, 0, len(chunks))
+	for i := 0; i < refStart; i++ {
+		out = append(out, chunks[i])
+	}
+	out = append(out, chunks[refStart])
+
+	// Accumulate reference entries into groups of up to chunkSize.
+	groupStart := refStart + 1
+	accumLen := 0
+	for i := refStart + 1; i < len(chunks); i++ {
+		c := chunks[i]
+		entryLen := utf8.RuneCountInString(strings.TrimSpace(c.Content))
+		isEntry := ReferenceEntryPattern.MatchString(c.Content)
+
+		if isEntry && accumLen+entryLen <= chunkSize {
+			// Accumulate into current group.
+			accumLen += entryLen
+			continue
+		}
+
+		// Flush the accumulated group before starting a new one.
+		if i > groupStart {
+			groupEnd := chunks[i-1].End
+			groupContent := string(runes[chunks[groupStart].Start:groupEnd])
+			out = append(out, Chunk{
+				Content: groupContent,
+				Start:   chunks[groupStart].Start,
+				End:     groupEnd,
+			})
+		}
+
+		if isEntry {
+			// Start a new group with this entry.
+			groupStart = i
+			accumLen = entryLen
+		} else {
+			// Non-reference entry — emit as standalone.
+			out = append(out, c)
+			groupStart = i + 1
+			accumLen = 0
+		}
+	}
+
+	// Flush remaining group.
+	if groupStart < len(chunks) {
+		groupEnd := chunks[len(chunks)-1].End
+		groupContent := string(runes[chunks[groupStart].Start:groupEnd])
+		out = append(out, Chunk{
+			Content: groupContent,
+			Start:   chunks[groupStart].Start,
+			End:     groupEnd,
+		})
+	}
+
+	// Re-sequence.
+	for i := range out {
+		out[i].Seq = i
+		populateStructuralMetadata(&out[i])
+	}
+	return out
 }

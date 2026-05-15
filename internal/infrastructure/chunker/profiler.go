@@ -6,8 +6,12 @@ package chunker
 
 import (
 	"math"
+	"regexp"
 	"strings"
 )
+
+// abstractPattern matches Markdown headings that mark an abstract section.
+var abstractPattern = regexp.MustCompile(`(?m)^[ \t]*#{1,6}[ \t]+(?:Abstract|摘要)\s*$`)
 
 // DocProfile holds the document-level signals used to choose a chunking tier.
 //
@@ -40,6 +44,13 @@ type DocProfile struct {
 	HasTables bool    `json:"has_tables"`
 	HasCode   bool    `json:"has_code"`
 	CodeRatio float64 `json:"code_ratio"`
+
+	// Academic document signals
+	IsAcademic          bool `json:"is_academic"`
+	FormulaCount        int  `json:"formula_count"`
+	HasAbstract         bool `json:"has_abstract"`
+	HasReferences       bool `json:"has_references"`
+	RecommendedChunkSize int `json:"recommended_chunk_size"`
 
 	// Detected language hints (best-effort)
 	DetectedLangs []string `json:"detected_langs"`
@@ -154,6 +165,19 @@ func ProfileDocument(text string) *DocProfile {
 		if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
 			p.HasTables = true
 		}
+		// Academic document signals
+		if strings.Contains(line, "1914") || strings.Contains(line, "[") || strings.Contains(line, "]") {
+			p.FormulaCount++
+		}
+		if strings.Contains(line, "egin{") {
+			p.FormulaCount++
+		}
+		if abstractPattern.MatchString(line) {
+			p.HasAbstract = true
+		}
+		if ReferenceSectionPattern.MatchString(line) {
+			p.HasReferences = true
+		}
 	}
 
 	if len(lengths) > 0 {
@@ -188,6 +212,13 @@ func ProfileDocument(text string) *DocProfile {
 	if lang == LangMixed {
 		// Provide all three for downstream pattern selection.
 		p.DetectedLangs = []string{LangEnglish, LangGerman, LangChinese}
+	}
+
+	// Academic document detection: papers typically have an abstract section,
+	// a reference section, and significant formula content.
+	p.IsAcademic = (p.HasAbstract || p.HasReferences) && p.FormulaCount >= 3
+	if p.IsAcademic {
+		p.RecommendedChunkSize = 1500
 	}
 
 	return p

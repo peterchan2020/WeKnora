@@ -10,8 +10,9 @@ import "regexp"
 
 // BoundaryPriority levels for heuristic chunk boundaries. Higher = stronger.
 const (
-	PrioFormFeed       = 100
-	PrioNumberedHead   = 90
+	PrioFormFeed           = 100
+	PrioReferenceSection   = 95
+	PrioNumberedHead       = 90
 	PrioChapterMarker  = 85
 	PrioAllCapsHeading = 70
 	PrioVisualSep      = 60
@@ -58,6 +59,15 @@ var ExcessiveBlanksPattern = regexp.MustCompile(`\n{3,}`)
 
 // PageFooterPattern matches typical "Seite X von Y" / "Page X of Y" lines.
 var PageFooterPattern = regexp.MustCompile(`(?mi)^[ \t]*(?:Seite|Page|页码?)\s+\d+(?:\s*(?:von|of|/)\s*\d+)?[ \t]*$`)
+
+// ReferenceSectionPattern matches Markdown headings that mark a reference /
+// bibliography section, e.g. "# References", "## References", "# Bibliography".
+var ReferenceSectionPattern = regexp.MustCompile(`(?m)^[ \t]*#{1,6}[ \t]+(?:References|Bibliography|参考文献|参考资料)\s*$`)
+
+// ReferenceEntryPattern matches individual bibliography entries that start
+// with a bracketed number or author-year format. Used to group multiple
+// entries into a single chunk rather than splitting each one individually.
+var ReferenceEntryPattern = regexp.MustCompile(`(?m)^[ \t]*\[\d+\]|^[ \t]*\d+\.\s+|^[ \t]*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s+\d{4}`)
 
 // GermanChapterPattern matches German chapter / section markers.
 var GermanChapterPattern = regexp.MustCompile(`(?m)^[ \t]*(?:Kapitel|Abschnitt|Teil)\s+(?:[0-9]+|[IVX]{1,5})[\.: ].{0,200}$`)

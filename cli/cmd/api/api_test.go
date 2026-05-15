@@ -40,7 +40,7 @@ func TestAPI_GetSuccess(t *testing.T) {
 	})
 	defer stop()
 
-	if err := runAPI(context.Background(), &Options{}, cli, "GET", "/api/v1/foo"); err != nil {
+	if err := runAPI(context.Background(), &Options{}, nil, cli, "GET", "/api/v1/foo"); err != nil {
 		t.Fatalf("runAPI: %v", err)
 	}
 	got := out.String()
@@ -62,31 +62,25 @@ func TestAPI_GetSuccess_JSON(t *testing.T) {
 	})
 	defer stop()
 
-	if err := runAPI(context.Background(), &Options{JSONOut: true}, cli, "GET", "/api/v1/foo"); err != nil {
+	if err := runAPI(context.Background(), &Options{}, &cmdutil.JSONOptions{}, cli, "GET", "/api/v1/foo"); err != nil {
 		t.Fatalf("runAPI: %v", err)
 	}
-	var env struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Status  int               `json:"status"`
-			Headers map[string]string `json:"headers"`
-			Body    map[string]any    `json:"body"`
-		} `json:"data"`
+	var got struct {
+		Status  int               `json:"status"`
+		Headers map[string]string `json:"headers"`
+		Body    map[string]any    `json:"body"`
 	}
-	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
-		t.Fatalf("decode envelope: %v\n%s", err, out.String())
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode bare JSON: %v\n%s", err, out.String())
 	}
-	if !env.OK {
-		t.Errorf("expected ok:true, got %s", out.String())
+	if got.Status != 200 {
+		t.Errorf("status: want 200, got %d", got.Status)
 	}
-	if env.Data.Status != 200 {
-		t.Errorf("status: want 200, got %d", env.Data.Status)
+	if got.Headers["Content-Type"] != "application/json" {
+		t.Errorf("Content-Type header missing: %v", got.Headers)
 	}
-	if env.Data.Headers["Content-Type"] != "application/json" {
-		t.Errorf("Content-Type header missing: %v", env.Data.Headers)
-	}
-	if got, ok := env.Data.Body["value"]; !ok || got.(float64) != 42 {
-		t.Errorf("body.value: want 42, got %v", env.Data.Body)
+	if v, ok := got.Body["value"]; !ok || v.(float64) != 42 {
+		t.Errorf("body.value: want 42, got %v", got.Body)
 	}
 }
 
@@ -104,7 +98,7 @@ func TestAPI_PostWithData(t *testing.T) {
 	defer stop()
 
 	opts := &Options{Data: `{"name":"foo"}`}
-	if err := runAPI(context.Background(), opts, cli, "POST", "/api/v1/things"); err != nil {
+	if err := runAPI(context.Background(), opts, nil, cli, "POST", "/api/v1/things"); err != nil {
 		t.Fatalf("runAPI: %v", err)
 	}
 	if seenMethod != http.MethodPost || seenPath != "/api/v1/things" {
@@ -117,7 +111,8 @@ func TestAPI_PostWithData(t *testing.T) {
 	}
 }
 
-func TestAPI_DataFile(t *testing.T) {
+// TestAPI_InputFile verifies --input <file> reads the request body from disk.
+func TestAPI_InputFile(t *testing.T) {
 	_, _ = iostreams.SetForTest(t)
 	tmp := filepath.Join(t.TempDir(), "body.json")
 	payload := `{"k":"from-file"}`
@@ -131,12 +126,33 @@ func TestAPI_DataFile(t *testing.T) {
 	})
 	defer stop()
 
-	opts := &Options{DataFile: tmp}
-	if err := runAPI(context.Background(), opts, cli, "POST", "/api/v1/x"); err != nil {
+	opts := &Options{Input: tmp}
+	if err := runAPI(context.Background(), opts, nil, cli, "POST", "/api/v1/x"); err != nil {
 		t.Fatalf("runAPI: %v", err)
 	}
 	if string(seenBody) != payload {
-		t.Errorf("body from --data-file: got %q, want %q", seenBody, payload)
+		t.Errorf("body from --input: got %q, want %q", seenBody, payload)
+	}
+}
+
+// TestAPI_InputDash_Stdin verifies the "--input -" form: the payload comes
+// from opts.StdinReader (production-default iostreams.IO.In).
+func TestAPI_InputDash_Stdin(t *testing.T) {
+	_, _ = iostreams.SetForTest(t)
+	var seenBody []byte
+	cli, stop := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{}`))
+	})
+	defer stop()
+
+	payload := `{"k":"from-stdin"}`
+	opts := &Options{Input: "-", StdinReader: strings.NewReader(payload)}
+	if err := runAPI(context.Background(), opts, nil, cli, "POST", "/api/v1/x"); err != nil {
+		t.Fatalf("runAPI: %v", err)
+	}
+	if string(seenBody) != payload {
+		t.Errorf("body from --input -: got %q, want %q", seenBody, payload)
 	}
 }
 
@@ -148,7 +164,7 @@ func TestAPI_NotFound(t *testing.T) {
 	})
 	defer stop()
 
-	err := runAPI(context.Background(), &Options{}, cli, "GET", "/api/v1/missing")
+	err := runAPI(context.Background(), &Options{}, nil, cli, "GET", "/api/v1/missing")
 	if err == nil {
 		t.Fatal("expected error for 404")
 	}
@@ -160,7 +176,7 @@ func TestAPI_NotFound(t *testing.T) {
 func TestAPI_InvalidMethod(t *testing.T) {
 	_, _ = iostreams.SetForTest(t)
 	// No server needed: validation should fail before dispatch.
-	err := runAPI(context.Background(), &Options{}, nil, "FOO", "/api/v1/things")
+	err := runAPI(context.Background(), &Options{}, nil, nil, "FOO", "/api/v1/things")
 	if err == nil {
 		t.Fatal("expected error for unsupported method")
 	}
@@ -172,7 +188,7 @@ func TestAPI_InvalidMethod(t *testing.T) {
 
 func TestAPI_PathWithoutSlash(t *testing.T) {
 	_, _ = iostreams.SetForTest(t)
-	err := runAPI(context.Background(), &Options{}, nil, "GET", "api/v1/things")
+	err := runAPI(context.Background(), &Options{}, nil, nil, "GET", "api/v1/things")
 	if err == nil {
 		t.Fatal("expected error for missing leading slash")
 	}
@@ -185,11 +201,10 @@ func TestAPI_PathWithoutSlash(t *testing.T) {
 // withRootHarness wraps `weknora api ...` under a synthetic root cmd that
 // registers the global `-y/--yes` persistent flag (mirrors addGlobalFlags in
 // cmd/root.go). Required because api's NewCmd doesn't register --yes itself
-// — it inherits from root in production.
+// - it inherits from root in production.
 func withRootHarness(api *cobra.Command, args ...string) *cobra.Command {
 	root := &cobra.Command{Use: "weknora"}
 	root.PersistentFlags().BoolP("yes", "y", false, "")
-	root.PersistentFlags().Bool("dry-run", false, "")
 	root.AddCommand(api)
 	root.SetArgs(append([]string{"api"}, args...))
 	root.SetContext(context.Background())
@@ -245,7 +260,7 @@ func TestAPI_DELETE_WithYes_Proceeds(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	if !called {
-		t.Error("DELETE handler not called — confirmation may have blocked")
+		t.Error("DELETE handler not called - confirmation may have blocked")
 	}
 }
 

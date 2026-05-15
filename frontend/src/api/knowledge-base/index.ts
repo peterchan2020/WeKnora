@@ -183,6 +183,11 @@ export function batchDeleteKnowledge(kbId: string, ids: string[]) {
   return post(`/api/v1/knowledge/batch-delete`, { kb_id: kbId, ids });
 }
 
+// 批量重建知识（同一知识库内）。后端会校验所有 id 隶属于 kb_id 且具有编辑权限。
+export function batchReparseKnowledge(kbId: string, ids: string[]) {
+  return post(`/api/v1/knowledge/batch-reparse`, { kb_id: kbId, ids });
+}
+
 export function downKnowledgeDetails(id: string) {
   return getDown(`/api/v1/knowledge/${id}/download`);
 }

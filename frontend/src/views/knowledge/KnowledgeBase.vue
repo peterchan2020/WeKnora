@@ -29,6 +29,7 @@ import {
   listKnowledgeBases,
   reparseKnowledge,
   batchDeleteKnowledge,
+  batchReparseKnowledge,
 } from "@/api/knowledge-base/index";
 import FAQEntryManager from './components/FAQEntryManager.vue';
 import DocumentListView from './components/DocumentListView.vue';
@@ -292,6 +293,8 @@ const selectedIds = ref<Set<string>>(new Set());
 let lastSelectedIndex = -1;
 const batchDeleteDialog = ref(false);
 const batchDeleting = ref(false);
+const batchRebuildDialog = ref(false);
+const batchRebuilding = ref(false);
 
 const selectedTagId = ref<string>('');
 const tagList = ref<any[]>([]);
@@ -1803,6 +1806,47 @@ const confirmBatchDelete = async () => {
   }
 };
 
+const openBatchRebuildDialog = () => {
+  if (selectedIds.value.size === 0) return;
+  batchRebuildDialog.value = true;
+};
+
+const confirmBatchRebuild = async () => {
+  if (batchRebuilding.value || selectedIds.value.size === 0) return;
+  const ids = Array.from(selectedIds.value);
+  batchRebuilding.value = true;
+  batchRebuildDialog.value = false;
+  MessagePlugin.loading(t('knowledgeBase.batchRebuildLoading'), { duration: 0 });
+  try {
+    const res: any = await batchReparseKnowledge(kbId.value, ids);
+    MessagePlugin.closeAll();
+    if (res?.success) {
+      const successCount = res.data?.success_count ?? ids.length;
+      const failCount = res.data?.fail_count ?? 0;
+      MessagePlugin.success(t('knowledgeBase.batchRebuildSuccess', { success: successCount, fail: failCount }));
+      // Update selected items' status to pending for immediate UI feedback
+      const idSet = new Set(ids);
+      for (const card of cardList.value) {
+        if (idSet.has(card.id)) {
+          card.parse_status = 'pending';
+        }
+      }
+      clearSelection();
+      batchMode.value = false;
+      page = 1;
+      loadKnowledgeFiles(kbId.value);
+      scheduleWikiStatusProbes();
+    } else {
+      MessagePlugin.error(res?.message || t('knowledgeBase.batchRebuildFailed'));
+    }
+  } catch (e: any) {
+    MessagePlugin.closeAll();
+    MessagePlugin.error(e?.message || t('knowledgeBase.batchRebuildFailed'));
+  } finally {
+    batchRebuilding.value = false;
+  }
+};
+
 // Bridge list-view actions back to existing per-card handlers.
 const handleListAction = (
   action: 'edit' | 'reparse' | 'move' | 'delete',
@@ -2562,9 +2606,11 @@ async function createNewSession(value: string): Promise<void> {
               <DocumentBatchBar
                 :count="selectedIds.size"
                 :loading="batchDeleting"
+                :rebuild-loading="batchRebuilding"
                 :visible="batchMode || selectedIds.size > 0"
                 @cancel="handleBatchCancel"
                 @delete="openBatchDeleteDialog"
+                @rebuild="openBatchRebuildDialog"
               />
             </div>
           </div>
@@ -2622,6 +2668,41 @@ async function createNewSession(value: string): Promise<void> {
                   @click="confirmBatchDelete"
                 >
                   {{ batchDeleting ? '...' : t('knowledgeBase.confirmDelete') }}
+                </span>
+              </div>
+            </div>
+          </t-dialog>
+
+          <!-- 批量重建知识确认弹窗 -->
+          <t-dialog
+            v-model:visible="batchRebuildDialog"
+            dialogClassName="del-knowledge"
+            :closeBtn="false"
+            :cancelBtn="null"
+            :confirmBtn="null"
+          >
+            <div class="circle-wrap">
+              <div class="header">
+                <img class="circle-img" src="@/assets/img/circle.png" alt="" />
+                <span class="circle-title">{{ t('knowledgeBase.batchRebuildConfirmation') }}</span>
+              </div>
+              <span class="del-circle-txt">
+                {{ t('knowledgeBase.confirmBatchRebuildDocument', { count: selectedIds.size }) }}
+              </span>
+              <div class="circle-btn">
+                <span
+                  class="circle-btn-txt"
+                  :class="{ disabled: batchRebuilding }"
+                  @click="batchRebuilding ? null : (batchRebuildDialog = false)"
+                >
+                  {{ t('common.cancel') }}
+                </span>
+                <span
+                  class="circle-btn-txt confirm"
+                  :class="{ disabled: batchRebuilding }"
+                  @click="confirmBatchRebuild"
+                >
+                  {{ batchRebuilding ? '...' : t('knowledgeBase.batchRebuildConfirm') }}
                 </span>
               </div>
             </div>

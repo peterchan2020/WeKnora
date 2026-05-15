@@ -237,6 +237,8 @@ func RegisterKnowledgeRoutes(r *gin.RouterGroup, handler *handler.KnowledgeHandl
 		k.GET("/search", handler.SearchKnowledge)
 		// 批量删除知识（同一知识库内）
 		k.POST("/batch-delete", handler.BatchDeleteKnowledge)
+		// 批量重建知识（同一知识库内）
+		k.POST("/batch-reparse", handler.BatchReparseKnowledge)
 		// 移动知识到其他知识库
 		k.POST("/move", handler.MoveKnowledge)
 		// 获取知识移动进度

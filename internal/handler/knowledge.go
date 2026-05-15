@@ -686,6 +686,12 @@ type BatchDeleteKnowledgeRequest struct {
 	IDs  []string `json:"ids"  binding:"required"`
 }
 
+// BatchReparseKnowledgeRequest is the body schema for POST /knowledge/batch-reparse.
+type BatchReparseKnowledgeRequest struct {
+	KBID string   `json:"kb_id" binding:"required"`
+	IDs  []string `json:"ids"  binding:"required"`
+}
+
 // BatchDeleteKnowledge godoc
 // @Summary      批量删除知识
 // @Description  按 ID 列表批量删除单个知识库下的多个知识条目
@@ -782,6 +788,104 @@ func (h *KnowledgeHandler) BatchDeleteKnowledge(c *gin.Context) {
 		"data": gin.H{
 			"task_id":       taskID,
 			"deleted_count": len(ids),
+		},
+	})
+}
+
+// BatchReparseKnowledge godoc
+// @Summary      批量重建知识
+// @Description  按 ID 列表批量重新解析单个知识库下的多个知识条目
+// @Tags         知识管理
+// @Accept       json
+// @Produce      json
+// @Param        request  body      BatchReparseKnowledgeRequest  true  "批量重建请求"
+// @Success      200  {object}  map[string]interface{}  "批量重建任务已提交"
+// @Failure      400  {object}  errors.AppError         "请求参数错误"
+// @Failure      403  {object}  errors.AppError         "权限不足"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /knowledge/batch-reparse [post]
+func (h *KnowledgeHandler) BatchReparseKnowledge(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var req BatchReparseKnowledgeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(errors.NewBadRequestError("Invalid request parameters: " + err.Error()))
+		return
+	}
+
+	seen := make(map[string]struct{}, len(req.IDs))
+	ids := make([]string, 0, len(req.IDs))
+	for _, raw := range req.IDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		c.Error(errors.NewBadRequestError("ids cannot be empty"))
+		return
+	}
+	const maxBatch = 200
+	if len(ids) > maxBatch {
+		c.Error(errors.NewBadRequestError(fmt.Sprintf("too many ids (max %d per batch)", maxBatch)))
+		return
+	}
+
+	_, kbID, effectiveTenantID, permission, err := h.validateKnowledgeBaseAccessWithKBID(c, req.KBID)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	if permission != types.OrgRoleAdmin && permission != types.OrgRoleEditor {
+		c.Error(errors.NewForbiddenError("No permission to reparse knowledge"))
+		return
+	}
+	ctx = context.WithValue(ctx, types.TenantIDContextKey, effectiveTenantID)
+
+	knowledgeList, err := h.kgService.GetKnowledgeBatch(ctx, effectiveTenantID, ids)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, nil)
+		c.Error(errors.NewInternalServerError(err.Error()))
+		return
+	}
+	if len(knowledgeList) != len(ids) {
+		c.Error(errors.NewBadRequestError("One or more knowledge entries not found"))
+		return
+	}
+	for _, k := range knowledgeList {
+		if k.KnowledgeBaseID != kbID {
+			c.Error(errors.NewBadRequestError(
+				fmt.Sprintf("Knowledge %s does not belong to knowledge base %s",
+					secutils.SanitizeForLog(k.ID), secutils.SanitizeForLog(kbID))))
+			return
+		}
+	}
+
+	var successCount, failCount int
+	for _, id := range ids {
+		if _, repErr := h.kgService.ReparseKnowledge(ctx, id); repErr != nil {
+			logger.Errorf(ctx, "Failed to reparse knowledge %s: %v", secutils.SanitizeForLog(id), repErr)
+			failCount++
+		} else {
+			successCount++
+		}
+	}
+
+	logger.Infof(ctx, "Batch reparse completed: kb_id=%s, success=%d, failed=%d",
+		secutils.SanitizeForLog(kbID), successCount, failCount)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Batch reparse completed",
+		"data": gin.H{
+			"success_count": successCount,
+			"fail_count":    failCount,
 		},
 	})
 }

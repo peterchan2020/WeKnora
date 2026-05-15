@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 defineProps<{
   count: number;
   loading?: boolean;
+  rebuildLoading?: boolean;
   // When true the bar stays visible even with 0 selections, so users can exit
   // batch mode from here without selecting anything first.
   visible?: boolean;
@@ -12,6 +13,7 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'cancel'): void;
   (e: 'delete'): void;
+  (e: 'rebuild'): void;
 }>();
 
 const { t } = useI18n();
@@ -39,6 +41,16 @@ const { t } = useI18n();
           </t-button>
         </div>
         <div class="batch-bar-actions">
+          <t-button
+            theme="primary"
+            size="small"
+            :disabled="count === 0"
+            :loading="rebuildLoading"
+            @click="emit('rebuild')"
+          >
+            <template #icon><t-icon name="refresh" size="14px" /></template>
+            {{ t('knowledgeBase.batchRebuild') }}
+          </t-button>
           <t-button
             theme="danger"
             variant="outline"

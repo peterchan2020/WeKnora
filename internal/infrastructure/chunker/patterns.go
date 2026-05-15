@@ -23,6 +23,16 @@ const (
 // Capture groups: (1) hashes, (2) heading text.
 var MarkdownHeadingPattern = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+?)\s*#*\s*$`)
 
+// StickyMarkdownHeadingPattern matches PDF-extracted Markdown headings where
+// the hash marker, numeric prefix, and title were glued together, e.g.
+// "#1Introduction" or "#4Strategies".
+var StickyMarkdownHeadingPattern = regexp.MustCompile(`^(#{1,6})(\d+(?:\.\d+)*)([A-Z][^\n]*)$`)
+
+// StickyNumberedSectionPattern matches PDF-extracted numbered headings where
+// the numeric prefix and title were glued together, e.g.
+// "4.1Prompt-based approaches".
+var StickyNumberedSectionPattern = regexp.MustCompile(`^[ \t]*(\d+(?:\.\d+){1,3})([A-Z][^\n]{0,200})$`)
+
 // FormFeedPattern matches the form-feed control character used by some PDF
 // converters as a page break marker.
 var FormFeedPattern = regexp.MustCompile(`\f`)

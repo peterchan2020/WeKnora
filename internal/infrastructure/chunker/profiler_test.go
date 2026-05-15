@@ -69,6 +69,23 @@ text`
 	}
 }
 
+func TestProfileDocument_StickyPDFHeadings(t *testing.T) {
+	doc := "#1Introduction\ntext\n\n#2Related Work\ntext\n\n#4Strategies\ntext"
+	p := ProfileDocument(doc)
+	if p.StickyHeadingCount != 3 {
+		t.Fatalf("expected 3 sticky headings, got %d", p.StickyHeadingCount)
+	}
+}
+
+func TestSelectStrategy_StickyPDFHeadingsPreferHeuristic(t *testing.T) {
+	doc := "#1Introduction\ntext\n\n#2Related Work\ntext\n\n#4Strategies\ntext"
+	p := ProfileDocument(doc)
+	chain := SelectStrategy(p)
+	if chain[0] != TierHeuristic {
+		t.Fatalf("sticky PDF headings should prefer heuristic tier, got %v", chain)
+	}
+}
+
 func TestProfileDocument_GermanChapters(t *testing.T) {
 	doc := "Kapitel 1: Einführung\n\nText\n\nKapitel 2: Hauptteil\n\nText"
 	p := ProfileDocument(doc)

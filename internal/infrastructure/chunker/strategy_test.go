@@ -201,6 +201,9 @@ func TestEnsureDefaults(t *testing.T) {
 	if len(cfg.Separators) == 0 {
 		t.Error("expected default separators")
 	}
+	if cfg.SemanticBreakpointPercentile != 75 {
+		t.Errorf("expected default SemanticBreakpointPercentile 75, got %d", cfg.SemanticBreakpointPercentile)
+	}
 }
 
 func TestValidateChunks_Empty(t *testing.T) {

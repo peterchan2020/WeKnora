@@ -55,6 +55,31 @@ func TestSplitByHeuristics_FallsThroughForUnstructuredDoc(t *testing.T) {
 	}
 }
 
+func TestSplitByHeuristics_ExplicitStrategyPreservesParagraphBlocks(t *testing.T) {
+	doc := strings.Join([]string{
+		strings.Repeat("retrieval quality depends on chunking. ", 6),
+		strings.Repeat("overlap affects answer completeness. ", 6),
+		strings.Repeat("separators should match document structure. ", 6),
+		strings.Repeat("embedding model choice matters. ", 6),
+		strings.Repeat("reranking improves final relevance. ", 6),
+	}, "\n\n")
+	cfg := SplitterConfig{
+		ChunkSize:    4000,
+		ChunkOverlap: 0,
+		Separators:   []string{"\n\n", "\n", ". "},
+		Strategy:     StrategyHeuristic,
+	}
+	chunks := splitByHeuristicsImpl(doc, cfg, nil)
+	if len(chunks) != 5 {
+		t.Fatalf("explicit structure strategy should preserve 5 paragraph blocks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if strings.Contains(strings.TrimSpace(c.Content), "\n\n") {
+			t.Fatalf("chunk %d still contains a paragraph break: %q", i, c.Content)
+		}
+	}
+}
+
 func TestSplitByHeuristics_OversizeBlockRecursesIntoLegacy(t *testing.T) {
 	huge := strings.Repeat("This is a long sentence. ", 200) // ~5000 chars
 	doc := "1. Intro\n" + huge
@@ -103,6 +128,28 @@ func TestSplitByHeuristics_BoundariesAreOrdered(t *testing.T) {
 	for i := 1; i < len(bounds); i++ {
 		if bounds[i].runeStart < bounds[i-1].runeStart {
 			t.Errorf("bounds not sorted: %d before %d", bounds[i].runeStart, bounds[i-1].runeStart)
+		}
+	}
+}
+
+func TestFindHeuristicBoundaries_DetectsStickyPDFHeadings(t *testing.T) {
+	doc := "#1Introduction\nbody\n\n#2Related Work\nbody\n\n4.1Prompt-based approaches\nbody"
+	bounds := findHeuristicBoundaries(doc, nil)
+	if len(bounds) < 3 {
+		t.Fatalf("expected sticky PDF headings to produce boundaries, got %d: %#v", len(bounds), bounds)
+	}
+
+	wantStarts := []int{0, len([]rune("#1Introduction\nbody\n\n")), len([]rune("#1Introduction\nbody\n\n#2Related Work\nbody\n\n"))}
+	for _, want := range wantStarts {
+		seen := false
+		for _, b := range bounds {
+			if b.runeStart == want {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			t.Fatalf("missing sticky heading boundary at rune offset %d; bounds=%#v", want, bounds)
 		}
 	}
 }
@@ -227,6 +274,26 @@ func TestCoalesceTinyHeuristicChunks_MergesInteriorTinyChunks(t *testing.T) {
 	}
 	if result[1].Content != "BBBBBB" {
 		t.Errorf("second chunk content = %q, want %q", result[1].Content, "BBBBBB")
+	}
+}
+
+func TestCoalesceTinyHeuristicChunks_UsesQuarterChunkSizeThreshold(t *testing.T) {
+	left := strings.Repeat("A", 300)
+	middle := strings.Repeat("m", 200)
+	right := strings.Repeat("B", 300)
+	runes := []rune(left + middle + right)
+	chunks := []Chunk{
+		{Content: left, Seq: 0, Start: 0, End: 300},
+		{Content: middle, Seq: 1, Start: 300, End: 500},
+		{Content: right, Seq: 2, Start: 500, End: 800},
+	}
+
+	result := coalesceTinyHeuristicChunks(chunks, runes, 1000)
+	if len(result) != 2 {
+		t.Fatalf("middle chunk below chunkSize/4 should merge, got %d chunks", len(result))
+	}
+	if result[0].Content != left+middle {
+		t.Fatalf("middle chunk should merge backward, got first chunk length %d", len([]rune(result[0].Content)))
 	}
 }
 

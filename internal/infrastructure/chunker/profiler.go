@@ -33,6 +33,7 @@ type DocProfile struct {
 	GermanChapterCount    int `json:"german_chapter_count"`
 	EnglishChapterCount   int `json:"english_chapter_count"`
 	ChineseChapterCount   int `json:"chinese_chapter_count"`
+	StickyHeadingCount    int `json:"sticky_heading_count"`
 	RepeatedFooterCount   int `json:"repeated_footer_count"`
 
 	// Content characteristics
@@ -122,6 +123,9 @@ func ProfileDocument(text string) *DocProfile {
 		runeLen := len([]rune(line))
 		lengths = append(lengths, float64(runeLen))
 
+		if isStickyMarkdownHeadingLine(line) {
+			p.StickyHeadingCount++
+		}
 		if matchHeading(line, &p.MdHeadingCounts) {
 			p.MdHeadingTotal++
 			continue
@@ -171,7 +175,7 @@ func ProfileDocument(text string) *DocProfile {
 		p.CodeRatio = float64(codeChars) / float64(p.TotalChars)
 	}
 
-	p.BlankParagraphBreaks = strings.Count(text, "\n\n\n")
+	p.BlankParagraphBreaks = countParagraphBreaks(text)
 
 	// Sample a slice of the document for language detection — avoids paying
 	// O(N) scan cost on huge inputs while still giving a stable signal.
@@ -192,6 +196,9 @@ func ProfileDocument(text string) *DocProfile {
 // matchHeading checks whether line is an ATX heading and increments the
 // appropriate level counter when so. Returns true on match.
 func matchHeading(line string, counts *map[int]int) bool {
+	if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
+		line = normalized
+	}
 	m := MarkdownHeadingPattern.FindStringSubmatch(line)
 	if m == nil {
 		return false
@@ -223,14 +230,18 @@ func SelectStrategy(p *DocProfile) []StrategyTier {
 	}
 	var chain []StrategyTier
 
+	if p.StickyHeadingCount >= 3 {
+		chain = append(chain, TierHeuristic)
+	}
+
 	// Tier 1 candidate: Markdown heading-aware
 	if p.MdHeadingTotal >= 3 && p.HeadingDensity() > 0.005 && p.DominantHeadingLevel() > 0 {
 		chain = append(chain, TierHeading)
 	}
 
 	// Tier 2 candidate: heuristic boundary detection
-	if p.HeuristicMarkerTotal() >= 5 || p.FormFeedCount > 0 ||
-		p.GermanChapterCount+p.EnglishChapterCount+p.ChineseChapterCount > 0 {
+	if p.StickyHeadingCount < 3 && (p.HeuristicMarkerTotal() >= 5 || p.FormFeedCount > 0 ||
+		p.GermanChapterCount+p.EnglishChapterCount+p.ChineseChapterCount > 0) {
 		chain = append(chain, TierHeuristic)
 	}
 

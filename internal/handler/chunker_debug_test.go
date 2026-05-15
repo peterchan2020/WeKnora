@@ -177,6 +177,40 @@ func TestPreviewChunking_ReturnsStructureDetails(t *testing.T) {
 	}
 }
 
+func TestPreviewChunking_HeuristicPreservesParagraphBlocks(t *testing.T) {
+	body := PreviewChunkingRequest{
+		Text: strings.Join([]string{
+			strings.Repeat("retrieval quality depends on chunking. ", 6),
+			strings.Repeat("overlap affects answer completeness. ", 6),
+			strings.Repeat("separators should match document structure. ", 6),
+			strings.Repeat("embedding model choice matters. ", 6),
+			strings.Repeat("reranking improves final relevance. ", 6),
+		}, "\n\n"),
+		ChunkingConfig: PreviewChunkingPayload{
+			ChunkSize:    4000,
+			ChunkOverlap: 0,
+			Separators:   []string{"\n\n", "\n", ". "},
+			Strategy:     chunker.StrategyHeuristic,
+		},
+	}
+	w, parsed := postPreview(t, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+	}
+	data := parsed["data"].(map[string]any)
+	if data["selected_tier"] != string(chunker.TierHeuristic) {
+		t.Fatalf("selected_tier = %v, want %s", data["selected_tier"], chunker.TierHeuristic)
+	}
+	stats := data["stats"].(map[string]any)
+	if got, _ := stats["count"].(float64); int(got) != 5 {
+		t.Fatalf("stats.count = %v, want 5", stats["count"])
+	}
+	profile := data["profile"].(map[string]any)
+	if got, _ := profile["blank_paragraph_breaks"].(float64); int(got) != 4 {
+		t.Fatalf("blank_paragraph_breaks = %v, want 4", profile["blank_paragraph_breaks"])
+	}
+}
+
 func TestPreviewChunking_RejectsEmptyText(t *testing.T) {
 	w, parsed := postPreview(t, PreviewChunkingRequest{Text: "   \n\t   "})
 	if w.Code != http.StatusBadRequest {

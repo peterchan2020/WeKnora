@@ -60,9 +60,6 @@ func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile,
 	}
 	runes := []rune(text)
 	totalRunes := len(runes)
-	if totalRunes <= cfg.ChunkSize {
-		return SplitText(text, cfg)
-	}
 
 	bounds := findHeuristicBoundaries(text, cfg.Languages)
 	// Drop any boundary that falls strictly inside a protected region (table,
@@ -73,6 +70,11 @@ func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile,
 		bounds = dropBoundsInsideSpans(bounds, prot)
 	}
 	if len(bounds) == 0 {
+		if shouldPreserveParagraphBlocks(cfg) {
+			if chunks := splitByParagraphBlocks(text, cfg); len(chunks) > 1 {
+				return chunks
+			}
+		}
 		return SplitText(text, cfg)
 	}
 
@@ -136,6 +138,89 @@ func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile,
 	return coalesceTinyHeuristicChunks(out, runes, cfg.ChunkSize)
 }
 
+func shouldPreserveParagraphBlocks(cfg SplitterConfig) bool {
+	switch strings.ToLower(strings.TrimSpace(cfg.Strategy)) {
+	case StrategyHeuristic, StrategySemantic:
+		return true
+	default:
+		return false
+	}
+}
+
+func splitByParagraphBlocks(text string, cfg SplitterConfig) []Chunk {
+	if text == "" {
+		return nil
+	}
+	runes := []rune(text)
+	var out []Chunk
+	seq := 0
+	blockStart := 0
+	for i := 0; i < len(runes); i++ {
+		end, ok := paragraphBreakEnd(runes, i)
+		if !ok {
+			continue
+		}
+		out = appendParagraphBlock(out, runes, blockStart, end, cfg, &seq)
+		blockStart = end
+		i = end - 1
+	}
+	out = appendParagraphBlock(out, runes, blockStart, len(runes), cfg, &seq)
+	return out
+}
+
+func countParagraphBreaks(text string) int {
+	runes := []rune(text)
+	count := 0
+	for i := 0; i < len(runes); i++ {
+		end, ok := paragraphBreakEnd(runes, i)
+		if !ok {
+			continue
+		}
+		count++
+		i = end - 1
+	}
+	return count
+}
+
+func appendParagraphBlock(out []Chunk, runes []rune, start, end int, cfg SplitterConfig, seq *int) []Chunk {
+	if end <= start || strings.TrimSpace(string(runes[start:end])) == "" {
+		return out
+	}
+	if cfg.ChunkSize > 0 && end-start > cfg.ChunkSize {
+		return appendOversizeBlock(out, runes, start, end, cfg, seq)
+	}
+	return appendChunk(out, runes, start, end, seq)
+}
+
+func paragraphBreakEnd(runes []rune, start int) (int, bool) {
+	if start < 0 || start >= len(runes) || runes[start] != '\n' {
+		return 0, false
+	}
+	j := start + 1
+	for j < len(runes) && isHorizontalWhitespace(runes[j]) {
+		j++
+	}
+	if j >= len(runes) || runes[j] != '\n' {
+		return 0, false
+	}
+	j++
+	for j < len(runes) {
+		k := j
+		for k < len(runes) && isHorizontalWhitespace(runes[k]) {
+			k++
+		}
+		if k >= len(runes) || runes[k] != '\n' {
+			break
+		}
+		j = k + 1
+	}
+	return j, true
+}
+
+func isHorizontalWhitespace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\r'
+}
+
 // findHeuristicBoundaries scans text and returns boundary positions in
 // ascending order. Lower-priority duplicates at the same offset are dropped.
 func findHeuristicBoundaries(text string, langs []string) []boundary {
@@ -158,26 +243,34 @@ func findHeuristicBoundaries(text string, langs []string) []boundary {
 		} else if !inFence {
 			runeStart := pos
 			added := false
+			matchLine := line
+			if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
+				matchLine = normalized
+			}
+			if isStickyMarkdownHeadingLine(line) {
+				bounds = append(bounds, boundary{runeStart: runeStart, priority: PrioNumberedHead})
+				added = true
+			}
 			for _, pat := range chapterPatterns {
-				if pat.MatchString(line) {
+				if pat.MatchString(matchLine) {
 					bounds = append(bounds, boundary{runeStart: runeStart, priority: PrioChapterMarker})
 					added = true
 					break
 				}
 			}
-			if !added && NumberedSectionPattern.MatchString(line) {
+			if !added && NumberedSectionPattern.MatchString(matchLine) {
 				bounds = append(bounds, boundary{runeStart: runeStart, priority: PrioNumberedHead})
 				added = true
 			}
-			if !added && AllCapsHeadingPattern.MatchString(line) {
+			if !added && AllCapsHeadingPattern.MatchString(matchLine) {
 				bounds = append(bounds, boundary{runeStart: runeStart, priority: PrioAllCapsHeading})
 				added = true
 			}
-			if !added && VisualSeparatorPattern.MatchString(line) {
+			if !added && VisualSeparatorPattern.MatchString(matchLine) {
 				bounds = append(bounds, boundary{runeStart: runeStart, priority: PrioVisualSep})
 				added = true
 			}
-			if !added && PageFooterPattern.MatchString(line) {
+			if !added && PageFooterPattern.MatchString(matchLine) {
 				bounds = append(bounds, boundary{runeStart: runeStart, priority: PrioPageFooter})
 			}
 		}
@@ -316,10 +409,16 @@ func appendOversizeBlock(out []Chunk, runes []rune, start, end int, cfg Splitter
 // document boundary. Interior tiny chunks prefer the previous neighbor
 // when it can absorb them without exceeding chunkSize, otherwise the
 // next neighbor.
-// tinyChunkThreshold is the minimum trimmed rune length a chunk must have
-// to survive as a standalone chunk in the heuristic splitter. Interior
-// chunks below this threshold are coalesced into a neighbor.
-const tinyChunkThreshold = 50
+// tinyHeuristicThreshold is the minimum trimmed rune length a chunk must have
+// to survive as a standalone chunk in the heuristic splitter. Interior chunks
+// below this threshold are coalesced into a neighbor.
+func tinyHeuristicThreshold(chunkSize int) int {
+	threshold := 50
+	if chunkSize > 0 && chunkSize/4 > threshold {
+		threshold = chunkSize / 4
+	}
+	return threshold
+}
 
 func coalesceTinyHeuristicChunks(chunks []Chunk, runes []rune, chunkSize int) []Chunk {
 	if len(chunks) <= 2 || chunkSize <= 0 {
@@ -331,10 +430,11 @@ func coalesceTinyHeuristicChunks(chunks []Chunk, runes []rune, chunkSize int) []
 	copy(out, chunks)
 
 	// Mark tiny interior chunks for merging.
+	threshold := tinyHeuristicThreshold(chunkSize)
 	merged := make([]bool, len(out))
 	for i := 1; i < len(out)-1; i++ {
 		trimmedLen := utf8.RuneCountInString(strings.TrimSpace(out[i].Content))
-		if trimmedLen < tinyChunkThreshold {
+		if trimmedLen < threshold {
 			merged[i] = true
 		}
 	}

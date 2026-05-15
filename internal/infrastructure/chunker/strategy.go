@@ -326,7 +326,7 @@ func ensureDefaults(cfg SplitterConfig) SplitterConfig {
 		cfg.SemanticBufferSize = 1
 	}
 	if cfg.SemanticBreakpointPercentile <= 0 {
-		cfg.SemanticBreakpointPercentile = 95
+		cfg.SemanticBreakpointPercentile = 75
 	}
 	if cfg.SemanticBreakpointPercentile > 100 {
 		cfg.SemanticBreakpointPercentile = 100

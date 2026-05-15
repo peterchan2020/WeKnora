@@ -193,6 +193,12 @@ func coalesceTinyChunks(in []Chunk, chunkSize int) []Chunk {
 	for i := 1; i < len(in); i++ {
 		next := in[i]
 		nextLen := utf8.RuneCountInString(next.Content)
+		if header, ok := pureHeadingChunkHeader(cur); ok && cur.End == next.Start {
+			next.ContextHeader = mergeBreadcrumbs(header, next.ContextHeader)
+			cur = next
+			curLen = nextLen
+			continue
+		}
 		// Adjacent + still-small + would not blow the size budget → merge.
 		if cur.End == next.Start && curLen < target && curLen+nextLen <= chunkSize {
 			cur.Content += next.Content
@@ -214,6 +220,25 @@ func coalesceTinyChunks(in []Chunk, chunkSize int) []Chunk {
 		out[i].Seq = i
 	}
 	return out
+}
+
+func pureHeadingChunkHeader(chunk Chunk) (string, bool) {
+	trimmed := strings.TrimSpace(chunk.Content)
+	if trimmed == "" || strings.Contains(trimmed, "\n") {
+		return "", false
+	}
+	line := trimmed
+	if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
+		line = normalized
+	}
+	m := MarkdownHeadingPattern.FindStringSubmatch(line)
+	if m == nil {
+		return "", false
+	}
+	if chunk.ContextHeader != "" {
+		return chunk.ContextHeader, true
+	}
+	return strings.Repeat("#", len(m[1])) + " " + strings.TrimSpace(m[2]), true
 }
 
 // commonHeadingPrefix returns the longest line-aligned prefix shared by two
@@ -268,18 +293,22 @@ func findHeadingBoundaries(text string, primaryLevel int) []headingBoundary {
 			continue
 		}
 		if !inFence {
-			m := MarkdownHeadingPattern.FindStringSubmatch(line)
+			matchLine := line
+			if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
+				matchLine = normalized
+			}
+			m := MarkdownHeadingPattern.FindStringSubmatch(matchLine)
 			if m != nil {
 				level := len(m[1])
 				if level >= 1 && level <= primaryLevel && pos > 0 {
 					bounds = append(bounds, headingBoundary{
 						runeStart: pos,
-						line:      line,
+						line:      matchLine,
 					})
 				}
 				if level >= 1 && level <= primaryLevel && pos == 0 {
 					// First line is a heading — replace the leading boundary
-					bounds[0].line = line
+					bounds[0].line = matchLine
 				}
 			}
 		}
@@ -310,13 +339,17 @@ func observeSubHeadings(runes []rune, primaryLevel int, h *HeadingHierarchy) {
 		if inFence {
 			continue
 		}
-		m := MarkdownHeadingPattern.FindStringSubmatch(line)
+		matchLine := line
+		if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
+			matchLine = normalized
+		}
+		m := MarkdownHeadingPattern.FindStringSubmatch(matchLine)
 		if m == nil {
 			continue
 		}
 		level := len(m[1])
 		if level > primaryLevel {
-			h.Observe(line)
+			h.Observe(matchLine)
 		}
 	}
 }

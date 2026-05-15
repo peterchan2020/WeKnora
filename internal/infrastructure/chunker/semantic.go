@@ -377,8 +377,8 @@ func coalesceTinySemanticChunks(chunks []Chunk, semanticBreakAfter map[int]bool,
 
 func tinySemanticChunkThreshold(cfg SplitterConfig) int {
 	threshold := 50
-	if cfg.ChunkSize > 0 && cfg.ChunkSize/8 > threshold {
-		threshold = cfg.ChunkSize / 8
+	if cfg.ChunkSize > 0 && cfg.ChunkSize/4 > threshold {
+		threshold = cfg.ChunkSize / 4
 	}
 	return threshold
 }

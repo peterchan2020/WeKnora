@@ -202,6 +202,40 @@ embedding 表缺列。`
 	}
 }
 
+func TestCoalesceTinyChunks_PromotesPureHeadingIntoNextContextHeader(t *testing.T) {
+	heading := "# 1 Introduction\n"
+	body := "This section explains the motivation and contribution."
+	chunks := []Chunk{
+		{
+			Content:       heading,
+			ContextHeader: "# 1 Introduction",
+			Seq:           0,
+			Start:         0,
+			End:           len([]rune(heading)),
+		},
+		{
+			Content: body,
+			Seq:     1,
+			Start:   len([]rune(heading)),
+			End:     len([]rune(heading)) + len([]rune(body)),
+		},
+	}
+
+	got := coalesceTinyChunks(chunks, 256)
+	if len(got) != 1 {
+		t.Fatalf("pure heading should be merged into following body chunk, got %d chunks: %#v", len(got), got)
+	}
+	if got[0].Content != body {
+		t.Fatalf("heading line should move out of Content, got %q", got[0].Content)
+	}
+	if got[0].ContextHeader != "# 1 Introduction" {
+		t.Fatalf("heading should survive as ContextHeader, got %q", got[0].ContextHeader)
+	}
+	if got[0].Start != len([]rune(heading)) || got[0].End != len([]rune(heading))+len([]rune(body)) {
+		t.Fatalf("body chunk offsets should remain body span, got [%d,%d)", got[0].Start, got[0].End)
+	}
+}
+
 // TestSplitByHeadings_CoalescePreservesPositionInvariant guards the
 // End-Start == len([]rune(Content)) invariant after merging. Adjacent
 // chunks (cur.End == next.Start) must concatenate cleanly; the merge must

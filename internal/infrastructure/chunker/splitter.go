@@ -86,8 +86,7 @@ type SplitterConfig struct {
 	// chunking. 1 matches LlamaIndex's SemanticSplitterNodeParser default.
 	SemanticBufferSize int
 	// SemanticBreakpointPercentile is the percentile of adjacent embedding
-	// distances used as the semantic breakpoint threshold. 95 matches
-	// LlamaIndex's default.
+	// distances used as the semantic breakpoint threshold.
 	SemanticBreakpointPercentile int
 }
 

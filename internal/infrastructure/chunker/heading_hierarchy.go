@@ -32,6 +32,9 @@ func NewHeadingHierarchy() *HeadingHierarchy {
 // blocks are NOT detected here — callers must avoid feeding code-block
 // content to Observe (the heading splitter does so).
 func (h *HeadingHierarchy) Observe(line string) (int, string) {
+	if normalized, ok := normalizeStickyPDFHeadingLine(line); ok {
+		line = normalized
+	}
 	m := MarkdownHeadingPattern.FindStringSubmatch(line)
 	if m == nil {
 		return 0, ""

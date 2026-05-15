@@ -141,3 +141,29 @@ func TestRefineSemantic_AdjustsOffsetsWithinStructuredSegments(t *testing.T) {
 		}
 	}
 }
+
+func TestTinySemanticChunkThreshold_UsesQuarterChunkSize(t *testing.T) {
+	got := tinySemanticChunkThreshold(SplitterConfig{ChunkSize: 1050})
+	if got != 262 {
+		t.Fatalf("threshold = %d, want chunkSize/4 rounded down to 262", got)
+	}
+}
+
+func TestCoalesceTinySemanticChunks_MergesChunkBelowQuarterSize(t *testing.T) {
+	left := strings.Repeat("A", 300)
+	middle := strings.Repeat("m", 200)
+	right := strings.Repeat("B", 300)
+	chunks := []Chunk{
+		{Content: left, Seq: 0, Start: 0, End: 300},
+		{Content: middle, Seq: 1, Start: 300, End: 500},
+		{Content: right, Seq: 2, Start: 500, End: 800},
+	}
+
+	got := coalesceTinySemanticChunks(chunks, nil, SplitterConfig{ChunkSize: 1000})
+	if len(got) != 2 {
+		t.Fatalf("middle chunk below chunkSize/4 should merge, got %d chunks", len(got))
+	}
+	if got[0].Content != left+middle {
+		t.Fatalf("middle chunk should merge backward, got first chunk length %d", len([]rune(got[0].Content)))
+	}
+}

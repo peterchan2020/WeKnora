@@ -794,7 +794,7 @@ func (h *KnowledgeHandler) BatchDeleteKnowledge(c *gin.Context) {
 
 // BatchReparseKnowledge godoc
 // @Summary      批量重建知识
-// @Description  按 ID 列表批量重新解析单个知识库下的多个知识条目
+// @Description  按 ID 列表批量重新解析单个知识库下的多个知识条目（异步任务）
 // @Tags         知识管理
 // @Accept       json
 // @Produce      json
@@ -867,27 +867,47 @@ func (h *KnowledgeHandler) BatchReparseKnowledge(c *gin.Context) {
 		}
 	}
 
-	var successCount, failCount int
-	for _, id := range ids {
-		if _, repErr := h.kgService.ReparseKnowledge(ctx, id); repErr != nil {
-			logger.Errorf(ctx, "Failed to reparse knowledge %s: %v", secutils.SanitizeForLog(id), repErr)
-			failCount++
-		} else {
-			successCount++
-		}
+	taskID, err := h.enqueueKnowledgeListReparse(ctx, effectiveTenantID, ids)
+	if err != nil {
+		logger.Errorf(ctx, "Failed to enqueue batch knowledge reparse task: %v", err)
+		c.Error(errors.NewInternalServerError("Failed to enqueue batch reparse task"))
+		return
 	}
 
-	logger.Infof(ctx, "Batch reparse completed: kb_id=%s, success=%d, failed=%d",
-		secutils.SanitizeForLog(kbID), successCount, failCount)
+	logger.Infof(ctx, "Batch knowledge reparse task enqueued: %s, kb_id: %s, count: %d",
+		taskID, secutils.SanitizeForLog(kbID), len(ids))
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Batch reparse completed",
+		"message": "Batch reparse task submitted",
 		"data": gin.H{
-			"success_count": successCount,
-			"fail_count":    failCount,
+			"task_id": taskID,
+			"count":   len(ids),
 		},
 	})
+}
+
+// enqueueKnowledgeListReparse enqueues an async batch-reparse task for the
+// given knowledge IDs and returns the asynq task ID.
+func (h *KnowledgeHandler) enqueueKnowledgeListReparse(
+	ctx context.Context, tenantID uint64, ids []string,
+) (string, error) {
+	payload := types.KnowledgeListReparsePayload{
+		TenantID:     tenantID,
+		KnowledgeIDs: ids,
+	}
+	langfuse.InjectTracing(ctx, &payload)
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal payload: %w", err)
+	}
+	task := asynq.NewTask(types.TypeKnowledgeListReparse, payloadBytes,
+		asynq.Queue("default"), asynq.MaxRetry(3))
+	info, err := h.asynqClient.Enqueue(task)
+	if err != nil {
+		return "", fmt.Errorf("enqueue task: %w", err)
+	}
+	return info.ID, nil
 }
 
 // ClearKnowledgeBaseContents godoc

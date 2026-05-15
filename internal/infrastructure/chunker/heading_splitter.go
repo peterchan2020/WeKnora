@@ -255,6 +255,15 @@ func pureHeadingChunkHeader(chunk Chunk) (string, bool) {
 		}
 		m := MarkdownHeadingPattern.FindStringSubmatch(matchLine)
 		if m == nil {
+			// Also accept numbered section lines without # prefix (common in
+			// PDF extraction), e.g. "7.1. Induced and spontaneous mutation".
+			if NumberedSectionPattern.MatchString(matchLine) {
+				if headingLine != "" {
+					return "", false // multiple heading lines — not a pure heading chunk
+				}
+				headingLine = matchLine
+				continue
+			}
 			return "", false // non-heading content found
 		}
 		if headingLine != "" {
@@ -269,7 +278,11 @@ func pureHeadingChunkHeader(chunk Chunk) (string, bool) {
 		return chunk.ContextHeader, true
 	}
 	m := MarkdownHeadingPattern.FindStringSubmatch(headingLine)
-	return strings.Repeat("#", len(m[1])) + " " + strings.TrimSpace(m[2]), true
+	if m != nil {
+		return strings.Repeat("#", len(m[1])) + " " + strings.TrimSpace(m[2]), true
+	}
+	// Numbered section without # prefix: return as-is for context.
+	return headingLine, true
 }
 
 // commonHeadingPrefix returns the longest line-aligned prefix shared by two

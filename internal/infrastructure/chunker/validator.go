@@ -50,8 +50,8 @@ func ValidateChunks(chunks []Chunk, totalChars, chunkSize int) ValidationResult 
 	// last chunk to be tiny because tail residue is normal.
 	tinyCount := 0
 	tinyThreshold := 100
-	if chunkSize > 0 && chunkSize/3 > tinyThreshold {
-		tinyThreshold = chunkSize / 3
+	if chunkSize > 0 && chunkSize/4 > tinyThreshold {
+		tinyThreshold = chunkSize / 4
 	}
 	for i, c := range chunks {
 		if i == len(chunks)-1 {

@@ -1814,23 +1814,16 @@ const openBatchRebuildDialog = () => {
 const confirmBatchRebuild = async () => {
   if (batchRebuilding.value || selectedIds.value.size === 0) return;
   const ids = Array.from(selectedIds.value);
+  const idSet = new Set(ids);
   batchRebuilding.value = true;
   batchRebuildDialog.value = false;
-  MessagePlugin.loading(t('knowledgeBase.batchRebuildLoading'), { duration: 0 });
   try {
     const res: any = await batchReparseKnowledge(kbId.value, ids);
-    MessagePlugin.closeAll();
     if (res?.success) {
-      const successCount = res.data?.success_count ?? ids.length;
-      const failCount = res.data?.fail_count ?? 0;
-      MessagePlugin.success(t('knowledgeBase.batchRebuildSuccess', { success: successCount, fail: failCount }));
-      // Update selected items' status to pending for immediate UI feedback
-      const idSet = new Set(ids);
-      for (const card of cardList.value) {
-        if (idSet.has(card.id)) {
-          card.parse_status = 'pending';
-        }
-      }
+      MessagePlugin.success(t('knowledgeBase.rebuildSubmitted'));
+      cardList.value = cardList.value.map(card =>
+        idSet.has(card.id) ? { ...card, parse_status: 'pending' } : card,
+      );
       clearSelection();
       batchMode.value = false;
       page = 1;
@@ -1840,7 +1833,6 @@ const confirmBatchRebuild = async () => {
       MessagePlugin.error(res?.message || t('knowledgeBase.batchRebuildFailed'));
     }
   } catch (e: any) {
-    MessagePlugin.closeAll();
     MessagePlugin.error(e?.message || t('knowledgeBase.batchRebuildFailed'));
   } finally {
     batchRebuilding.value = false;

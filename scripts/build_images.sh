@@ -136,7 +136,7 @@ build_app_image() {
     docker build \
         --platform $PLATFORM \
         --build-arg GOPRIVATE_ARG=${GOPRIVATE:-""} \
-        --build-arg GOPROXY_ARG=${GOPROXY:-"https://goproxy.cn,direct"} \
+        --build-arg GOPROXY_ARG=${GOPROXY:-"https://goproxy.cn|https://goproxy.io|direct"} \
         --build-arg GOSUMDB_ARG=${GOSUMDB:-"off"} \
         --build-arg VERSION_ARG="$VERSION" \
         --build-arg COMMIT_ID_ARG="$COMMIT_ID" \

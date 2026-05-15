@@ -122,11 +122,14 @@ func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile,
 		// Would adding this block exceed the budget?
 		accumulated := nextEnd - chunkStart
 		if accumulated > cfg.ChunkSize && curEnd-chunkStart >= minChunkSize {
-			// Flush accumulated content as a chunk, restart at curEnd.
-			out = appendChunk(out, runes, chunkStart, curEnd, &seq)
+			// Snap the flush end to the nearest preceding sentence boundary
+			// so we don't cut mid-sentence. Only snap when the snapped
+			// position is still >= minChunkSize from chunkStart.
+			flushEnd := snapRuneToSentenceEnd(runes, chunkStart, curEnd, minChunkSize)
+			out = appendChunk(out, runes, chunkStart, flushEnd, &seq)
 			// Snap overlap start to the nearest semantic boundary or line
 			// break instead of slicing mid-line / mid-word.
-			chunkStart = applyOverlapAligned(runes, curEnd, cfg.ChunkOverlap, bounds)
+			chunkStart = applyOverlapAligned(runes, flushEnd, cfg.ChunkOverlap, bounds)
 		}
 		curEnd = nextEnd
 	}
@@ -413,9 +416,13 @@ func appendOversizeBlock(out []Chunk, runes []rune, start, end int, cfg Splitter
 // to survive as a standalone chunk in the heuristic splitter. Interior chunks
 // below this threshold are coalesced into a neighbor.
 func tinyHeuristicThreshold(chunkSize int) int {
+	// Raise the floor so fragments below ~100 chars are always coalesced,
+	// and scale up with chunkSize so large-chunk configs don't leave
+	// relatively tiny debris. chunkSize/4 catches more fragments than
+	// the previous chunkSize/3 minimum without being overly aggressive.
 	threshold := 100
-	if chunkSize > 0 && chunkSize/3 > threshold {
-		threshold = chunkSize / 3
+	if chunkSize > 0 && chunkSize/4 > threshold {
+		threshold = chunkSize / 4
 	}
 	return threshold
 }

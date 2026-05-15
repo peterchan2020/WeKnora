@@ -275,6 +275,7 @@ export default {
     batchDeleteFailed: "批量删除失败",
     batchRebuild: "重建知识",
     batchRebuildConfirmation: "确认重建知识",
+    batchRebuildConfirm: "确定重建",
     confirmBatchRebuildDocument: "您已选中 {count} 个文档，确定要批量重建知识吗？重建过程将重新解析文档内容并生成摘要，可能需要较长时间。",
     batchRebuildLoading: "正在批量重建知识，请稍候...",
     batchRebuildSuccess: "批量重建知识完成，成功 {success} 个，失败 {fail} 个",

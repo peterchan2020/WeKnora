@@ -274,6 +274,7 @@ export default {
     batchDeleteFailed: 'Batch delete failed',
     batchRebuild: 'Rebuild',
     batchRebuildConfirmation: 'Confirm Batch Rebuild',
+    batchRebuildConfirm: 'Confirm Rebuild',
     confirmBatchRebuildDocument: 'You have selected {count} documents. Are you sure you want to rebuild? This will re-parse document content and generate summaries, which may take a while.',
     batchRebuildLoading: 'Rebuilding knowledge, please wait...',
     batchRebuildSuccess: 'Batch rebuild completed: {success} succeeded, {fail} failed',

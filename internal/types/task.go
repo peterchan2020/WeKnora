@@ -10,6 +10,7 @@ const (
 	TypeIndexDelete          = "index:delete"           // 索引删除任务
 	TypeKBDelete             = "kb:delete"              // 知识库删除任务
 	TypeKnowledgeListDelete  = "knowledge:list_delete"  // 批量删除知识任务
+	TypeKnowledgeListReparse = "knowledge:list_reparse" // 批量重建知识任务
 	TypeKnowledgeMove        = "knowledge:move"         // 知识移动任务
 	TypeDataTableSummary     = "datatable:summary"      // 表格摘要任务
 	TypeImageMultimodal      = "image:multimodal"       // 图片多模态处理任务（OCR + VLM Caption）
@@ -111,6 +112,13 @@ type KBDeletePayload struct {
 
 // KnowledgeListDeletePayload represents the batch knowledge delete task payload
 type KnowledgeListDeletePayload struct {
+	TracingContext
+	TenantID     uint64   `json:"tenant_id"`
+	KnowledgeIDs []string `json:"knowledge_ids"`
+}
+
+// KnowledgeListReparsePayload represents the batch knowledge reparse task payload
+type KnowledgeListReparsePayload struct {
 	TracingContext
 	TenantID     uint64   `json:"tenant_id"`
 	KnowledgeIDs []string `json:"knowledge_ids"`

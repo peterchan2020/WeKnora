@@ -208,7 +208,6 @@ func matchHeading(line string, counts *map[int]int) bool {
 type StrategyTier string
 
 const (
-	TierSemantic  StrategyTier = "semantic"
 	TierHeading   StrategyTier = "heading"
 	TierHeuristic StrategyTier = "heuristic"
 	TierLegacy    StrategyTier = "legacy"

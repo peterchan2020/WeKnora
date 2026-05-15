@@ -2001,10 +2001,6 @@ export default {
         legacy: {
           label: 'Length-based',
           tooltip: 'Ignores structure; splits recursively by character count and separators — the original behavior. Use when the structure-aware strategies misbehave on your content.'
-        },
-        semantic: {
-          label: 'Semantic',
-          tooltip: 'Embeds sentence windows and cuts at large meaning shifts, with automatic fallback to length-based splitting if embeddings are unavailable.'
         }
       },
       overlapWarning: 'Overlap is large compared to chunk size — chunks will share most of their content.',
@@ -2014,10 +2010,10 @@ export default {
       languagesLabel: 'Language hints',
       languagesDescription: 'Restricts heuristic patterns to the chosen languages (DE/EN/ZH). Empty = auto-detect from sample. Set explicitly for homogeneous corpora to avoid false-positive matches across languages.',
       languagesPlaceholder: 'Auto-detect',
-      semanticBufferSizeLabel: 'Semantic buffer size',
-      semanticBufferSizeDescription: 'Sentence window radius used before embedding. Default 1 matches LlamaIndex; 0 compares single sentences.',
+      semanticBufferSizeLabel: 'Semantic refinement window',
+      semanticBufferSizeDescription: 'Sentence window radius used when structure-aware splitting refines an oversized section with embeddings. Default 1 matches LlamaIndex; 0 compares single sentences.',
       semanticBreakpointPercentileLabel: 'Semantic breakpoint percentile',
-      semanticBreakpointPercentileDescription: 'Cuts where adjacent sentence-window distance is above this percentile. Higher values create fewer, larger semantic chunks.',
+      semanticBreakpointPercentileDescription: 'Within each structural section, cuts where adjacent sentence-window distance is above this percentile. Higher values create fewer, larger refined chunks.',
       languageOptions: {
         de: 'German',
         en: 'English',

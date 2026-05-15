@@ -1,6 +1,7 @@
 package chunker
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -67,6 +68,29 @@ func TestSplitByHeuristics_OversizeBlockRecursesIntoLegacy(t *testing.T) {
 		if len([]rune(c.Content)) > 2*cfg.ChunkSize {
 			t.Errorf("chunk %d exceeds 2x size: %d runes", i, len([]rune(c.Content)))
 		}
+	}
+}
+
+func TestSplitByHeuristics_SemanticRefinesOversizeStructuredBlock(t *testing.T) {
+	doc := "1. Introduction\nalpha starts here. alpha keeps going. beta begins now. beta keeps going."
+	cfg := SplitterConfig{
+		ChunkSize:                    60,
+		ChunkOverlap:                 0,
+		Separators:                   []string{"\n\n", "\n", ". "},
+		Strategy:                     StrategyHeuristic,
+		SemanticBufferSize:           0,
+		SemanticBreakpointPercentile: 80,
+	}
+
+	chunks := SplitWithSemantic(context.Background(), doc, cfg, fakeSemanticEmbedder{})
+	if len(chunks) != 2 {
+		t.Fatalf("expected semantic refinement to split the structured block into 2 chunks, got %d: %#v", len(chunks), chunks)
+	}
+	if !strings.Contains(chunks[0].Content, "alpha keeps going") || strings.Contains(chunks[0].Content, "beta begins") {
+		t.Fatalf("first chunk should stay on alpha topic, got %q", chunks[0].Content)
+	}
+	if !strings.Contains(chunks[1].Content, "beta begins now") {
+		t.Fatalf("second chunk should contain beta topic, got %q", chunks[1].Content)
 	}
 }
 

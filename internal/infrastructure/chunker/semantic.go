@@ -23,6 +23,45 @@ type sentenceSpan struct {
 	end   int
 }
 
+// RefineSemantic applies semantic splitting inside pre-structured chunks.
+// Chunks that already fit the configured size are kept as-is; only oversize
+// structural segments are embedded and split further. Returned Start/End
+// offsets remain relative to the original full document.
+func RefineSemantic(ctx context.Context, segments []Chunk, cfg SplitterConfig, embedder SemanticEmbedder) ([]Chunk, error) {
+	if len(segments) == 0 {
+		return nil, nil
+	}
+	if embedder == nil {
+		return nil, errors.New("semantic refinement requires an embedding model")
+	}
+
+	cfg = ensureDefaults(cfg)
+	out := make([]Chunk, 0, len(segments))
+	for _, segment := range segments {
+		if segment.Content == "" {
+			continue
+		}
+		if len([]rune(segment.Content)) <= cfg.ChunkSize {
+			segment.Seq = len(out)
+			out = append(out, segment)
+			continue
+		}
+
+		refined, err := SplitSemantic(ctx, segment.Content, cfg, embedder)
+		if err != nil {
+			return nil, err
+		}
+		for _, sub := range refined {
+			sub.Seq = len(out)
+			sub.Start += segment.Start
+			sub.End += segment.Start
+			sub.ContextHeader = mergeBreadcrumbs(segment.ContextHeader, sub.ContextHeader)
+			out = append(out, sub)
+		}
+	}
+	return out, nil
+}
+
 // SplitSemantic implements a LlamaIndex-style semantic breakpoint splitter:
 // sentence windows are embedded, adjacent window distances are measured, and
 // distances above the configured percentile become chunk boundaries.
@@ -291,6 +330,17 @@ func coalesceTinySemanticChunks(chunks []Chunk, semanticBreakAfter map[int]bool,
 				chunks[i+1] = mergeSemanticChunks(chunk, chunks[i+1])
 				continue
 			}
+			// If a tiny fragment is boxed in by semantic breakpoints on both
+			// sides, keeping it standalone is worse for retrieval than crossing
+			// one boundary. Prefer the previous neighbor when it fits.
+			if len(out) > 0 && canMergeSemanticChunks(out[len(out)-1], chunk, cfg) {
+				out[len(out)-1] = mergeSemanticChunks(out[len(out)-1], chunk)
+				continue
+			}
+			if i+1 < len(chunks) && canMergeSemanticChunks(chunk, chunks[i+1], cfg) {
+				chunks[i+1] = mergeSemanticChunks(chunk, chunks[i+1])
+				continue
+			}
 			out = append(out, chunk)
 			continue
 		}
@@ -371,15 +421,15 @@ func appendSemanticGroup(out []Chunk, runes []rune, start, end int, cfg Splitter
 	subCfg.Strategy = StrategyLegacy
 	for _, sub := range SplitText(raw, subCfg) {
 		out = append(out, Chunk{
-			Content:   sub.Content,
-			Seq:       *seq,
-			Start:     start + sub.Start,
-			End:       start + sub.End,
-			Tables:    sub.Tables,
-			Formulas:  sub.Formulas,
+			Content:    sub.Content,
+			Seq:        *seq,
+			Start:      start + sub.Start,
+			End:        start + sub.End,
+			Tables:     sub.Tables,
+			Formulas:   sub.Formulas,
 			CodeBlocks: sub.CodeBlocks,
-			Images:    sub.Images,
-			Metadata:  sub.Metadata,
+			Images:     sub.Images,
+			Metadata:   sub.Metadata,
 		})
 		*seq++
 	}

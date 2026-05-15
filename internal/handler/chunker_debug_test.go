@@ -224,7 +224,7 @@ func TestPreviewChunking_LegacyStrategy_NoProfile(t *testing.T) {
 	}
 }
 
-func TestPreviewChunking_SemanticRequiresEmbeddingModel(t *testing.T) {
+func TestPreviewChunking_SemanticAliasFallsBackWithoutEmbeddingModel(t *testing.T) {
 	body := PreviewChunkingRequest{
 		Text: "alpha starts here. beta starts there.",
 		ChunkingConfig: PreviewChunkingPayload{
@@ -234,11 +234,12 @@ func TestPreviewChunking_SemanticRequiresEmbeddingModel(t *testing.T) {
 		},
 	}
 	w, parsed := postPreview(t, body)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status: got %d want 400; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
-	if errStr, _ := parsed["error"].(string); !strings.Contains(errStr, "embedding model") {
-		t.Errorf("error should mention embedding model, got %q", errStr)
+	data := parsed["data"].(map[string]any)
+	if data["selected_tier"] == chunker.StrategySemantic {
+		t.Fatalf("semantic should no longer be a standalone preview tier: %v", data["selected_tier"])
 	}
 }
 

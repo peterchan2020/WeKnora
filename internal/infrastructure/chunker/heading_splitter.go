@@ -5,6 +5,7 @@
 package chunker
 
 import (
+	"context"
 	"strings"
 	"unicode/utf8"
 )
@@ -30,6 +31,28 @@ type headingBoundary struct {
 // already ran the profiler (auto strategy), the same profile is threaded
 // through here so we don't re-scan the entire document.
 func splitByHeadingsImpl(text string, cfg SplitterConfig, profile *DocProfile) []Chunk {
+	return splitByHeadingsStructured(text, cfg, profile, false)
+}
+
+func splitByHeadingsSemantic(
+	ctx context.Context,
+	text string,
+	cfg SplitterConfig,
+	profile *DocProfile,
+	embedder SemanticEmbedder,
+) []Chunk {
+	coarse := splitByHeadingsStructured(text, cfg, profile, true)
+	refined, err := RefineSemantic(ctx, coarse, cfg, embedder)
+	if err != nil {
+		return splitByHeadingsImpl(text, cfg, profile)
+	}
+	if v := ValidateChunks(refined, len([]rune(text)), cfg.ChunkSize); !v.OK {
+		return splitByHeadingsImpl(text, cfg, profile)
+	}
+	return refined
+}
+
+func splitByHeadingsStructured(text string, cfg SplitterConfig, profile *DocProfile, keepOversizeSections bool) []Chunk {
 	if text == "" {
 		return nil
 	}
@@ -85,6 +108,20 @@ func splitByHeadingsImpl(text string, cfg SplitterConfig, profile *DocProfile) [
 		// to preserve End-Start == len(Content) invariants relied on by
 		// document reconstruction (knowledge.go:2278+).
 		if bcLen+2+secLen <= cfg.ChunkSize {
+			chunk := Chunk{
+				Content:       sectionContent,
+				ContextHeader: breadcrumb,
+				Seq:           seq,
+				Start:         b.runeStart,
+				End:           endRune,
+			}
+			populateStructuralMetadata(&chunk)
+			out = append(out, chunk)
+			seq++
+			continue
+		}
+
+		if keepOversizeSections {
 			chunk := Chunk{
 				Content:       sectionContent,
 				ContextHeader: breadcrumb,
@@ -283,4 +320,3 @@ func observeSubHeadings(runes []rune, primaryLevel int, h *HeadingHierarchy) {
 		}
 	}
 }
-

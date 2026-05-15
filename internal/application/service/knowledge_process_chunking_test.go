@@ -89,22 +89,22 @@ func TestSetDocumentMetadataPreservesStructureMetadata(t *testing.T) {
 	}
 }
 
-func TestParentStrategyForSemanticChild(t *testing.T) {
+func TestNormalizeSemanticAlias(t *testing.T) {
 	tests := []struct {
 		name     string
 		strategy string
 		want     string
 	}{
-		{name: "semantic parent falls back to auto", strategy: chunker.StrategySemantic, want: chunker.StrategyAuto},
-		{name: "empty parent falls back to auto", strategy: "", want: chunker.StrategyAuto},
+		{name: "semantic maps to heuristic", strategy: chunker.StrategySemantic, want: chunker.StrategyHeuristic},
+		{name: "empty is preserved", strategy: "", want: ""},
 		{name: "explicit heading is preserved", strategy: chunker.StrategyHeading, want: chunker.StrategyHeading},
 		{name: "explicit heuristic is preserved", strategy: chunker.StrategyHeuristic, want: chunker.StrategyHeuristic},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := parentStrategyForSemanticChild(tt.strategy); got != tt.want {
-				t.Fatalf("parentStrategyForSemanticChild(%q) = %q, want %q", tt.strategy, got, tt.want)
+			if got := normalizeSemanticAlias(tt.strategy); got != tt.want {
+				t.Fatalf("normalizeSemanticAlias(%q) = %q, want %q", tt.strategy, got, tt.want)
 			}
 		})
 	}

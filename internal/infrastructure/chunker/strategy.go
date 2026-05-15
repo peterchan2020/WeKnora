@@ -16,7 +16,9 @@ import (
 
 // Strategy values for SplitterConfig.Strategy.
 const (
-	StrategyAuto      = "auto"
+	StrategyAuto = "auto"
+	// StrategySemantic is a deprecated public-API alias for structure-aware
+	// chunking with semantic refinement when an embedder is available.
 	StrategySemantic  = "semantic"
 	StrategyHeading   = "heading"
 	StrategyHeuristic = "heuristic"
@@ -33,6 +35,16 @@ const (
 // SplitWithDiagnostics performs (matters in SplitParentChild where
 // Split is called once per parent).
 func Split(text string, cfg SplitterConfig) []Chunk {
+	return splitWithOptionalSemantic(context.Background(), text, cfg, nil)
+}
+
+// SplitWithSemantic chunks text using the configured structural strategy and
+// refines oversize structural segments with embeddings when embedder is set.
+func SplitWithSemantic(ctx context.Context, text string, cfg SplitterConfig, embedder SemanticEmbedder) []Chunk {
+	return splitWithOptionalSemantic(ctx, text, cfg, embedder)
+}
+
+func splitWithOptionalSemantic(ctx context.Context, text string, cfg SplitterConfig, embedder SemanticEmbedder) []Chunk {
 	if text == "" {
 		return nil
 	}
@@ -42,11 +54,11 @@ func Split(text string, cfg SplitterConfig) []Chunk {
 
 	var lastOut []Chunk
 	for i, tier := range chain {
-		out := runTier(tier, text, cfg, profile)
+		out := runTier(ctx, tier, text, cfg, profile, embedder)
 		if v := ValidateChunks(out, totalChars, cfg.ChunkSize); v.OK {
 			return out
 		} else {
-			logger.Debugf(context.Background(), "chunker: tier %s rejected: %s", tier, v.Reason)
+			logger.Debugf(ctx, "chunker: tier %s rejected: %s", tier, v.Reason)
 		}
 		if tier == TierLegacy && i == len(chain)-1 {
 			lastOut = out
@@ -87,6 +99,26 @@ type Diagnostics struct {
 // profile when available). Use this for the chunker preview endpoint
 // where the caller wants to know which tier won and why others lost.
 func SplitWithDiagnostics(text string, cfg SplitterConfig) ([]Chunk, *Diagnostics) {
+	return splitWithDiagnosticsOptionalSemantic(context.Background(), text, cfg, nil)
+}
+
+// SplitWithSemanticDiagnostics is SplitWithDiagnostics plus optional semantic
+// refinement for callers that can provide an embedder.
+func SplitWithSemanticDiagnostics(
+	ctx context.Context,
+	text string,
+	cfg SplitterConfig,
+	embedder SemanticEmbedder,
+) ([]Chunk, *Diagnostics) {
+	return splitWithDiagnosticsOptionalSemantic(ctx, text, cfg, embedder)
+}
+
+func splitWithDiagnosticsOptionalSemantic(
+	ctx context.Context,
+	text string,
+	cfg SplitterConfig,
+	embedder SemanticEmbedder,
+) ([]Chunk, *Diagnostics) {
 	// Default selected tier to legacy so an empty diag never carries the
 	// zero string — that would render as a blank tag in the debug UI.
 	diag := &Diagnostics{SelectedTier: TierLegacy}
@@ -102,14 +134,14 @@ func SplitWithDiagnostics(text string, cfg SplitterConfig) ([]Chunk, *Diagnostic
 	var lastOut []Chunk
 	var lastTier StrategyTier
 	for i, tier := range chain {
-		out := runTier(tier, text, cfg, profile)
+		out := runTier(ctx, tier, text, cfg, profile, embedder)
 		v := ValidateChunks(out, totalChars, cfg.ChunkSize)
 		if v.OK {
 			diag.SelectedTier = tier
 			return out, diag
 		}
 		diag.Rejected = append(diag.Rejected, TierRejection{Tier: tier, Reason: v.Reason})
-		logger.Debugf(context.Background(), "chunker: tier %s rejected: %s", tier, v.Reason)
+		logger.Debugf(ctx, "chunker: tier %s rejected: %s", tier, v.Reason)
 		if tier == TierLegacy && i == len(chain)-1 {
 			lastOut = out
 			lastTier = tier
@@ -203,8 +235,9 @@ func resolveChainWithProfile(text string, cfg SplitterConfig) ([]StrategyTier, *
 	case StrategyHeuristic:
 		return []StrategyTier{TierHeuristic, TierLegacy}, nil
 	case StrategySemantic:
-		// Semantic chunking needs an embedding model, so the knowledge service		// calls SplitSemantic directly. Plain chunker callers fall back to the		// deterministic legacy splitter instead of trying to embed here.
-		return []StrategyTier{TierLegacy}, nil
+		// Backward compatibility for stored configs: standalone semantic is
+		// now structure-aware semantic refinement.
+		return []StrategyTier{TierHeuristic, TierLegacy}, nil
 	case StrategyRecursive:
 		// "recursive" is a public-API alias for "legacy": both invoke
 		// SplitText. Kept for backwards compatibility with stored configs.
@@ -230,11 +263,24 @@ func resolveChainWithProfile(text string, cfg SplitterConfig) ([]StrategyTier, *
 // profile may be nil when the caller did not run the document profiler
 // (explicit non-auto strategies skip profiling); splitters that need a
 // profile compute one on demand.
-func runTier(tier StrategyTier, text string, cfg SplitterConfig, profile *DocProfile) []Chunk {
+func runTier(
+	ctx context.Context,
+	tier StrategyTier,
+	text string,
+	cfg SplitterConfig,
+	profile *DocProfile,
+	embedder SemanticEmbedder,
+) []Chunk {
 	switch tier {
 	case TierHeading:
+		if embedder != nil {
+			return splitByHeadingsSemantic(ctx, text, cfg, profile, embedder)
+		}
 		return splitByHeadings(text, cfg, profile)
 	case TierHeuristic:
+		if embedder != nil {
+			return splitByHeuristicsSemantic(ctx, text, cfg, profile, embedder)
+		}
 		return splitByHeuristics(text, cfg, profile)
 	case TierLegacy:
 		return SplitText(text, cfg)

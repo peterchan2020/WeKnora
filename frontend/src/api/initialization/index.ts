@@ -113,6 +113,9 @@ export interface KBModelConfigRequest {
         tokenLimit?: number
         // Language hints for heuristic patterns. Empty array = auto-detect.
         languages?: string[]
+        // Semantic refinement settings used by structure-aware strategies.
+        semanticBufferSize?: number
+        semanticBreakpointPercentile?: number
     }
     multimodal: {
         enabled: boolean

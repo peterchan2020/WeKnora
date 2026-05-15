@@ -207,7 +207,7 @@
         </div>
 
         <!-- Semantic chunking -->
-        <div v-if="localStrategy === 'semantic'" class="setting-row">
+        <div v-if="semanticRefinementVisible" class="setting-row">
           <div class="setting-info">
             <label>{{ $t('knowledgeEditor.chunking.semanticBufferSizeLabel') }}</label>
             <p class="desc">{{ $t('knowledgeEditor.chunking.semanticBufferSizeDescription') }}</p>
@@ -224,7 +224,7 @@
           </div>
         </div>
 
-        <div v-if="localStrategy === 'semantic'" class="setting-row">
+        <div v-if="semanticRefinementVisible" class="setting-row">
           <div class="setting-info">
             <label>{{ $t('knowledgeEditor.chunking.semanticBreakpointPercentileLabel') }}</label>
             <p class="desc">{{ $t('knowledgeEditor.chunking.semanticBreakpointPercentileDescription') }}</p>
@@ -309,7 +309,11 @@ const localSeparators = ref([...props.config.separators])
 const localEnableParentChild = ref(props.config.enableParentChild ?? false)
 const localParentChunkSize = ref(props.config.parentChunkSize || 4096)
 const localChildChunkSize = ref(props.config.childChunkSize || 384)
-const localStrategy = ref(props.config.strategy ?? '')
+function normalizeStrategy(strategy?: string) {
+  return strategy === 'semantic' ? 'heuristic' : (strategy ?? '')
+}
+
+const localStrategy = ref(normalizeStrategy(props.config.strategy))
 const localTokenLimit = ref(props.config.tokenLimit ?? 0)
 const localLanguages = ref<string[]>([...(props.config.languages ?? [])])
 const localSemanticBufferSize = ref(props.config.semanticBufferSize ?? 1)
@@ -321,11 +325,6 @@ const strategyOptions = computed(() => [
     label: t('knowledgeEditor.chunking.strategies.auto.label'),
     value: 'auto',
     tooltip: t('knowledgeEditor.chunking.strategies.auto.tooltip')
-  },
-  {
-    label: t('knowledgeEditor.chunking.strategies.semantic.label'),
-    value: 'semantic',
-    tooltip: t('knowledgeEditor.chunking.strategies.semantic.tooltip')
   },
   {
     label: t('knowledgeEditor.chunking.strategies.heading.label'),
@@ -352,6 +351,10 @@ const currentStrategyInfo = computed(() => {
 })
 
 const advancedDisabled = computed(() => localStrategy.value === 'legacy')
+
+const semanticRefinementVisible = computed(() =>
+  ['auto', 'heading', 'heuristic'].includes(localStrategy.value)
+)
 
 const overlapTooHigh = computed(
   () => localChunkOverlap.value > 0 && localChunkOverlap.value >= localChunkSize.value / 2
@@ -394,7 +397,7 @@ watch(() => props.config, (newConfig) => {
   localEnableParentChild.value = newConfig.enableParentChild ?? false
   localParentChunkSize.value = newConfig.parentChunkSize || 4096
   localChildChunkSize.value = newConfig.childChunkSize || 384
-  localStrategy.value = newConfig.strategy ?? ''
+  localStrategy.value = normalizeStrategy(newConfig.strategy)
   localTokenLimit.value = newConfig.tokenLimit ?? 0
   localLanguages.value = [...(newConfig.languages ?? [])]
   localSemanticBufferSize.value = newConfig.semanticBufferSize ?? 1

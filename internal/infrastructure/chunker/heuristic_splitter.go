@@ -10,6 +10,7 @@
 package chunker
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -31,7 +32,29 @@ type boundary struct {
 // profile is currently unused (this tier scans for boundaries directly) but
 // is accepted to keep the splitByHeadings / splitByHeuristics signatures
 // uniform — see strategy.runTier.
-func splitByHeuristicsImpl(text string, cfg SplitterConfig, _ *DocProfile) []Chunk {
+func splitByHeuristicsImpl(text string, cfg SplitterConfig, profile *DocProfile) []Chunk {
+	return splitByHeuristicsStructured(text, cfg, profile, false)
+}
+
+func splitByHeuristicsSemantic(
+	ctx context.Context,
+	text string,
+	cfg SplitterConfig,
+	profile *DocProfile,
+	embedder SemanticEmbedder,
+) []Chunk {
+	coarse := splitByHeuristicsStructured(text, cfg, profile, true)
+	refined, err := RefineSemantic(ctx, coarse, cfg, embedder)
+	if err != nil {
+		return splitByHeuristicsImpl(text, cfg, profile)
+	}
+	if v := ValidateChunks(refined, len([]rune(text)), cfg.ChunkSize); !v.OK {
+		return splitByHeuristicsImpl(text, cfg, profile)
+	}
+	return refined
+}
+
+func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile, keepOversizeBlocks bool) []Chunk {
 	if text == "" {
 		return nil
 	}
@@ -78,11 +101,17 @@ func splitByHeuristicsImpl(text string, cfg SplitterConfig, _ *DocProfile) []Chu
 			// The block between the previous and this boundary is itself too
 			// large to fit in any chunk. Flush current accumulation, then
 			// recursively chunk the oversize block via the legacy splitter.
+			// When semantic refinement is enabled, keep that block intact so
+			// RefineSemantic can split within the structurally coherent segment.
 			if curEnd-chunkStart > 0 {
 				out = appendChunk(out, runes, chunkStart, curEnd, &seq)
 				chunkStart = curEnd
 			}
-			out = appendOversizeBlock(out, runes, curEnd, nextEnd, cfg, &seq)
+			if keepOversizeBlocks {
+				out = appendChunk(out, runes, curEnd, nextEnd, &seq)
+			} else {
+				out = appendOversizeBlock(out, runes, curEnd, nextEnd, cfg, &seq)
+			}
 			curEnd = nextEnd
 			chunkStart = nextEnd
 			continue
@@ -259,15 +288,15 @@ func appendOversizeBlock(out []Chunk, runes []rune, start, end int, cfg Splitter
 	subs := SplitText(subText, cfg)
 	for _, s := range subs {
 		out = append(out, Chunk{
-			Content:   s.Content,
-			Seq:       *seq,
-			Start:     start + s.Start,
-			End:       start + s.End,
-			Tables:    s.Tables,
-			Formulas:  s.Formulas,
+			Content:    s.Content,
+			Seq:        *seq,
+			Start:      start + s.Start,
+			End:        start + s.End,
+			Tables:     s.Tables,
+			Formulas:   s.Formulas,
 			CodeBlocks: s.CodeBlocks,
-			Images:    s.Images,
-			Metadata:  s.Metadata,
+			Images:     s.Images,
+			Metadata:   s.Metadata,
 		})
 		*seq++
 	}

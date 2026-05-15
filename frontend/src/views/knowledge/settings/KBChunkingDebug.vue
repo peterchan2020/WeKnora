@@ -314,9 +314,6 @@ const runPreview = async () => {
   result.value = null
   expandedChunks.value = new Set()
   try {
-    if ((props.config.strategy ?? '') === 'semantic' && !props.embeddingModelId) {
-      throw new Error(t('knowledgeEditor.indexing.embeddingRequired'))
-    }
     // Send all fields explicitly (including empty / 0 / []) so the
     // preview faithfully reflects what would happen on save. Mirrors
     // the buildSubmitData convention in KnowledgeBaseEditorModal.
@@ -424,7 +421,6 @@ const tierDisplay = (tier: StrategyTier) => {
 
 const tierTheme = (tier: StrategyTier) => {
   switch (normalizeTier(tier)) {
-    case 'semantic':
     case 'heading':
     case 'heuristic':
       return 'success'

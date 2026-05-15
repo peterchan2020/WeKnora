@@ -214,8 +214,8 @@ func (s *knowledgeService) splitKnowledgeContent(
 	if kb.ChunkingConfig.EnableParentChild {
 		parentCfg, childCfg := buildParentChildConfigs(kb.ChunkingConfig, chunkCfg)
 		var pcResult chunker.ParentChildResult
-		if isSemanticChunking(chunkCfg) && semanticEmbedder != nil {
-			pcResult = s.splitSemanticParentChild(ctx, text, parentCfg, childCfg, semanticEmbedder)
+		if semanticEmbedder != nil {
+			pcResult = s.splitParentChildWithSemantic(ctx, text, parentCfg, childCfg, semanticEmbedder)
 		} else {
 			pcResult = chunker.SplitParentChild(text, parentCfg, childCfg)
 		}
@@ -231,23 +231,28 @@ func (s *knowledgeService) semanticChunkingEmbedder(
 	kb *types.KnowledgeBase,
 	cfg chunker.SplitterConfig,
 ) embedding.Embedder {
-	if !isSemanticChunking(cfg) {
+	if !semanticRefinementEnabled(cfg) {
 		return nil
 	}
 	if kb == nil || strings.TrimSpace(kb.EmbeddingModelID) == "" {
-		logger.Warnf(ctx, "Semantic chunking requested but KB has no embedding model; falling back to structural chunking")
+		logger.Warnf(ctx, "Semantic refinement requested but KB has no embedding model; falling back to structural chunking")
 		return nil
 	}
 	embeddingModel, err := s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
 	if err != nil {
-		logger.Warnf(ctx, "Semantic chunking failed to load embedding model %s: %v; falling back to structural chunking", kb.EmbeddingModelID, err)
+		logger.Warnf(ctx, "Semantic refinement failed to load embedding model %s: %v; falling back to structural chunking", kb.EmbeddingModelID, err)
 		return nil
 	}
 	return embeddingModel
 }
 
-func isSemanticChunking(cfg chunker.SplitterConfig) bool {
-	return strings.EqualFold(strings.TrimSpace(cfg.Strategy), chunker.StrategySemantic)
+func semanticRefinementEnabled(cfg chunker.SplitterConfig) bool {
+	switch strings.ToLower(strings.TrimSpace(cfg.Strategy)) {
+	case chunker.StrategyAuto, chunker.StrategyHeading, chunker.StrategyHeuristic, chunker.StrategySemantic:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *knowledgeService) splitFlatContent(
@@ -256,32 +261,27 @@ func (s *knowledgeService) splitFlatContent(
 	cfg chunker.SplitterConfig,
 	semanticEmbedder embedding.Embedder,
 ) []chunker.Chunk {
-	if isSemanticChunking(cfg) && semanticEmbedder != nil {
-		chunks, err := chunker.SplitSemantic(ctx, text, cfg, semanticEmbedder)
-		if err == nil && len(chunks) > 0 {
-			logger.Infof(ctx, "Semantic chunking produced %d chunks", len(chunks))
-			return chunks
-		}
-		if err != nil {
-			logger.Warnf(ctx, "Semantic chunking failed: %v; falling back to structural chunking", err)
-		}
+	if semanticEmbedder != nil {
+		chunks := chunker.SplitWithSemantic(ctx, text, cfg, semanticEmbedder)
+		logger.Infof(ctx, "Structure-aware semantic refinement produced %d chunks", len(chunks))
+		return chunks
 	}
 	return chunker.Split(text, cfg)
 }
 
-func (s *knowledgeService) splitSemanticParentChild(
+func (s *knowledgeService) splitParentChildWithSemantic(
 	ctx context.Context,
 	text string,
 	parentCfg, childCfg chunker.SplitterConfig,
 	semanticEmbedder embedding.Embedder,
 ) chunker.ParentChildResult {
-	parentCfg.Strategy = parentStrategyForSemanticChild(parentCfg.Strategy)
-	parents := chunker.Split(text, parentCfg)
+	parentCfg.Strategy = normalizeSemanticAlias(parentCfg.Strategy)
+	childCfg.Strategy = normalizeSemanticAlias(childCfg.Strategy)
+	parents := chunker.SplitWithSemantic(ctx, text, parentCfg, semanticEmbedder)
 	if len(parents) == 0 {
 		return chunker.ParentChildResult{}
 	}
 
-	childCfg.Strategy = chunker.StrategySemantic
 	var newParents []chunker.Chunk
 	var children []chunker.ChildChunk
 	childSeq := 0
@@ -304,10 +304,10 @@ func (s *knowledgeService) splitSemanticParentChild(
 	return chunker.ParentChildResult{Parents: newParents, Children: children}
 }
 
-func parentStrategyForSemanticChild(strategy string) string {
-	switch strings.TrimSpace(strategy) {
-	case "", chunker.StrategySemantic:
-		return chunker.StrategyAuto
+func normalizeSemanticAlias(strategy string) string {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case chunker.StrategySemantic:
+		return chunker.StrategyHeuristic
 	default:
 		return strategy
 	}

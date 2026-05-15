@@ -214,14 +214,35 @@ func previewChunking(c *gin.Context, modelService interfaces.ModelService) {
 		SemanticBreakpointPercentile: req.ChunkingConfig.SemanticBreakpointPercentile,
 	}
 
-	if strings.EqualFold(strings.TrimSpace(cfg.Strategy), chunker.StrategySemantic) {
+	var embedder chunker.SemanticEmbedder
+	timeout := previewTimeout
+	if semanticPreviewRefinementEnabled(cfg) && strings.TrimSpace(req.EmbeddingModelID) != "" {
+		if modelService == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   "semantic refinement preview is not wired to a model service",
+			})
+			return
+		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), semanticPreviewTimeout)
 		defer cancel()
-		handleSemanticPreview(c, ctx, req, cfg, modelService)
-		return
+		model, err := modelService.GetEmbeddingModel(ctx, strings.TrimSpace(req.EmbeddingModelID))
+		if err != nil {
+			status := http.StatusBadGateway
+			if errors.Is(err, modelsvc.ErrModelNotFound) {
+				status = http.StatusBadRequest
+			}
+			c.JSON(status, gin.H{
+				"success": false,
+				"error":   "failed to load embedding model for semantic refinement preview: " + err.Error(),
+			})
+			return
+		}
+		embedder = model
+		timeout = semanticPreviewTimeout
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), previewTimeout)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
 
 	// Run the splitter on a goroutine so we can honor the request timeout.
@@ -233,7 +254,7 @@ func previewChunking(c *gin.Context, modelService interfaces.ModelService) {
 	}
 	resCh := make(chan splitResult, 1)
 	go func() {
-		chunks, diag := chunker.SplitWithDiagnostics(req.Text, cfg)
+		chunks, diag := chunker.SplitWithSemanticDiagnostics(ctx, req.Text, cfg, embedder)
 		resCh <- splitResult{chunks: chunks, diag: diag}
 	}()
 
@@ -264,77 +285,13 @@ func previewChunking(c *gin.Context, modelService interfaces.ModelService) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": resp})
 }
 
-func handleSemanticPreview(
-	c *gin.Context,
-	ctx context.Context,
-	req PreviewChunkingRequest,
-	cfg chunker.SplitterConfig,
-	modelService interfaces.ModelService,
-) {
-	modelID := strings.TrimSpace(req.EmbeddingModelID)
-	if modelID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "semantic chunking preview requires an embedding model",
-		})
-		return
+func semanticPreviewRefinementEnabled(cfg chunker.SplitterConfig) bool {
+	switch strings.ToLower(strings.TrimSpace(cfg.Strategy)) {
+	case chunker.StrategyAuto, chunker.StrategyHeading, chunker.StrategyHeuristic, chunker.StrategySemantic:
+		return true
+	default:
+		return false
 	}
-	if modelService == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   "semantic chunking preview is not wired to a model service",
-		})
-		return
-	}
-
-	embedder, err := modelService.GetEmbeddingModel(ctx, modelID)
-	if err != nil {
-		status := http.StatusBadGateway
-		if errors.Is(err, modelsvc.ErrModelNotFound) {
-			status = http.StatusBadRequest
-		}
-		c.JSON(status, gin.H{
-			"success": false,
-			"error":   "failed to load embedding model for semantic preview: " + err.Error(),
-		})
-		return
-	}
-
-	type splitResult struct {
-		chunks []chunker.Chunk
-		err    error
-	}
-	resCh := make(chan splitResult, 1)
-	go func() {
-		chunks, err := chunker.SplitSemantic(ctx, req.Text, cfg, embedder)
-		resCh <- splitResult{chunks: chunks, err: err}
-	}()
-
-	var sr splitResult
-	select {
-	case sr = <-resCh:
-	case <-ctx.Done():
-		c.JSON(http.StatusGatewayTimeout, gin.H{
-			"success": false,
-			"error":   "semantic chunker preview timed out",
-		})
-		return
-	}
-	if sr.err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"error":   "semantic chunking preview failed: " + sr.err.Error(),
-		})
-		return
-	}
-
-	profile := chunker.ProfileDocument(req.Text)
-	resp := buildPreviewResponse(sr.chunks, &chunker.Diagnostics{
-		SelectedTier: chunker.TierSemantic,
-		TierChain:    []chunker.StrategyTier{chunker.TierSemantic},
-		Profile:      profile,
-	}, profile)
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": resp})
 }
 
 func buildPreviewResponse(

@@ -109,3 +109,35 @@ func TestSplitSemantic_PreservesRuneOffsets(t *testing.T) {
 		}
 	}
 }
+
+func TestRefineSemantic_AdjustsOffsetsWithinStructuredSegments(t *testing.T) {
+	prefix := "preface. "
+	segmentText := "alpha starts here. alpha keeps going. beta begins now. beta keeps going."
+	cfg := SplitterConfig{
+		ChunkSize:                    55,
+		ChunkOverlap:                 0,
+		Separators:                   []string{"\n\n", "\n", ". "},
+		SemanticBufferSize:           0,
+		SemanticBreakpointPercentile: 80,
+	}
+	segments := []Chunk{{
+		Content: segmentText,
+		Seq:     0,
+		Start:   len([]rune(prefix)),
+		End:     len([]rune(prefix)) + len([]rune(segmentText)),
+	}}
+
+	chunks, err := RefineSemantic(context.Background(), segments, cfg, fakeSemanticEmbedder{})
+	if err != nil {
+		t.Fatalf("RefineSemantic returned error: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 refined chunks, got %d: %#v", len(chunks), chunks)
+	}
+	full := []rune(prefix + segmentText)
+	for i, c := range chunks {
+		if got := string(full[c.Start:c.End]); got != c.Content {
+			t.Fatalf("chunk[%d] content does not match adjusted full-doc span: got %q want %q", i, c.Content, got)
+		}
+	}
+}

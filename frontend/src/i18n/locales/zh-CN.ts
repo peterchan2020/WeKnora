@@ -2588,10 +2588,6 @@ export default {
         legacy: {
           label: "按长度切分",
           tooltip: "忽略结构，仅按字符数和分隔符递归切分——原始行为。当上述策略对你的内容效果不佳时使用。"
-        },
-        semantic: {
-          label: "语义切分",
-          tooltip: "对句子窗口做向量化，在语义变化明显的位置切分；嵌入模型不可用时自动回退到按长度切分。"
         }
       },
       overlapWarning: "重叠相对于分块大小较大——分块之间会共享大部分内容。",
@@ -2601,10 +2597,10 @@ export default {
       languagesLabel: "语言提示",
       languagesDescription: "限制启发式模式只识别选定的语言（DE/EN/ZH）。留空 = 自动检测。同质化语料库可显式设置以避免跨语言误匹配。",
       languagesPlaceholder: "自动检测",
-      semanticBufferSizeLabel: "语义窗口半径",
-      semanticBufferSizeDescription: "向量化前合并的前后句数。默认 1，与 LlamaIndex 一致；0 表示单句对比。",
+      semanticBufferSizeLabel: "语义精炼窗口",
+      semanticBufferSizeDescription: "结构感知切分在精炼超长段落时使用的句子窗口半径。默认 1，与 LlamaIndex 一致；0 表示单句对比。",
       semanticBreakpointPercentileLabel: "语义断点分位数",
-      semanticBreakpointPercentileDescription: "相邻句子窗口距离高于该分位数时切分。数值越高，分块更少且更大。",
+      semanticBreakpointPercentileDescription: "在每个结构段内部，相邻句子窗口距离高于该分位数时切分。数值越高，精炼后的分块更少且更大。",
       languageOptions: {
         de: "德语",
         en: "英语",

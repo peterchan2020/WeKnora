@@ -818,9 +818,9 @@ func coalesceOrphanHeadings(chunks []Chunk, chunkSize int) []Chunk {
 // when followed by whitespace or end-of-text. Kept for backward compatibility
 // with callers that don't need the primary/secondary distinction.
 var sentenceEndRunes = map[rune]bool{
-	'.':  true,
-	'!':  true,
-	'?':  true,
+	'.': true,
+	'!': true,
+	'?': true,
 	'。': true,
 	'！': true,
 	'？': true,
@@ -832,9 +832,9 @@ var sentenceEndRunes = map[rune]bool{
 // scripts). Used by findBestSplitPoint and snapRuneToSentenceEnd to prefer
 // these over weaker clause boundaries.
 var primarySentenceEnd = map[rune]bool{
-	'.':  true,
-	'!':  true,
-	'?':  true,
+	'.': true,
+	'!': true,
+	'?': true,
 	'。': true,
 	'！': true,
 	'？': true,
@@ -844,15 +844,15 @@ var primarySentenceEnd = map[rune]bool{
 // (though not ideal) when no primary sentence boundary is found. These are
 // used as a fallback tier in findBestSplitPoint and snapRuneToSentenceEnd.
 var clauseEndRunes = map[rune]bool{
-	',':  true,
-	';':  true,
-	':':  true,
+	',': true,
+	';': true,
+	':': true,
 	'，': true,
 	'、': true,
 	'；': true,
 	'：': true,
-	'—':  true, // em dash (clause break)
-	'…':  true, // ellipsis (clause break)
+	'—': true, // em dash (clause break)
+	'…': true, // ellipsis (clause break)
 }
 
 // isAbbreviationDot returns true when the '.' at position i in runes is part
@@ -1012,7 +1012,7 @@ func snapFlushToSentenceBoundary(units []splitUnit, chunkSize int) ([]splitUnit,
 			r := runes[j]
 			if r == '。' || r == '！' || r == '？' {
 				splitAt := j + 1
-				if splitAt > 0 && splitAt < len(runes) {
+				if splitAt > 0 && splitAt <= len(runes) {
 					best = splitPoint{unitIdx: i, runeOff: splitAt}
 					bestSet = true
 				}
@@ -1049,7 +1049,7 @@ func snapFlushToSentenceBoundary(units []splitUnit, chunkSize int) ([]splitUnit,
 				for splitAt < len(runes) && (runes[splitAt] == ' ' || runes[splitAt] == '\t') {
 					splitAt++
 				}
-				if splitAt > 0 && splitAt < len(runes) {
+				if splitAt > 0 && splitAt <= len(runes) {
 					best = splitPoint{unitIdx: i, runeOff: splitAt}
 					bestSet = true
 				}
@@ -1080,7 +1080,7 @@ func snapFlushToSentenceBoundary(units []splitUnit, chunkSize int) ([]splitUnit,
 				for splitAt < len(runes) && (runes[splitAt] == ' ' || runes[splitAt] == '\t') {
 					splitAt++
 				}
-				if splitAt > 0 && splitAt < len(runes) {
+				if splitAt > 0 && splitAt <= len(runes) {
 					best = splitPoint{unitIdx: i, runeOff: splitAt}
 					bestSet = true
 				}
@@ -1190,7 +1190,7 @@ func mergeUnits(units []splitUnit, chunkSize, chunkOverlap int) []Chunk {
 			// If the next unit is a complete sentence and the overflow is
 			// modest (≤10% of chunkSize), allow slight overflow for
 			// sentence integrity instead of cutting mid-sentence.
-			if u.isSentence && curLen+uLen+headersLen <= chunkSize+chunkSize/10 {
+			if u.isSentence && curLen+uLen+headersLen <= chunkSize+chunkSize/5 {
 				// Fall through to append the unit below
 			} else {
 				// Try to snap the flush boundary to a sentence boundary so we

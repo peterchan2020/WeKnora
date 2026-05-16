@@ -279,8 +279,6 @@ export default {
     batchRebuildLoading: 'Rebuilding knowledge, please wait...',
     batchRebuildSuccess: 'Batch rebuild completed: {success} succeeded, {fail} failed',
     batchRebuildFailed: 'Batch rebuild failed. Please check your network connection and try again',
-    paginationInfo: 'Loaded {loaded} / {total} documents',
-    loadMore: 'Load more',
     statusCompleted: 'Completed',
     statusProcessing: 'Processing',
     statusPending: 'Pending',

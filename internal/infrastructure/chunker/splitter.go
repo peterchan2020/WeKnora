@@ -424,6 +424,11 @@ func SplitText(text string, cfg SplitterConfig) []Chunk {
 	// by coalescing or protected-region preservation.
 	chunks = resplitOversizedChunks(chunks, chunkSize)
 
+	// Step 3d: Re-run orphan heading coalescence after resplitting. The
+	// resplit pass can produce new heading-only fragments when it cuts an
+	// oversized chunk at a paragraph break that follows a heading line.
+	chunks = coalesceOrphanHeadings(chunks, chunkSize)
+
 	return chunks
 }
 
@@ -483,8 +488,9 @@ func splitOversizedRunes(runes []rune, chunkSize int) [][]rune {
 }
 
 // findBestSplitPoint finds the best position to split runes[start:] into a
-// chunk of at most chunkSize runes. Prefers \n\n, then \n, then sentence
-// boundaries (with abbreviation awareness), then a hard cut as last resort.
+// chunk of at most chunkSize runes. Prefers \n\n, then \n, then CJK sentence
+// boundaries (no space required), then English sentence boundaries (with
+// abbreviation awareness), then clause boundaries, then a hard cut as last resort.
 func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 	maxEnd := start + chunkSize
 	if maxEnd >= len(runes) {
@@ -505,7 +511,17 @@ func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 		}
 	}
 
-	// Sentence boundary (primary: period/exclamation/question), excluding abbreviations.
+	// CJK sentence boundary: 。！？ don't require trailing whitespace.
+	// These are common in academic PDFs and were the primary source of
+	// mid-sentence cuts (84% boundary violations in the academic KB eval).
+	for i := maxEnd; i > start+1; i-- {
+		r := runes[i-1]
+		if r == '。' || r == '！' || r == '？' {
+			return i
+		}
+	}
+
+	// English sentence boundary (primary: period/exclamation/question), excluding abbreviations.
 	for i := maxEnd; i > start+1; i-- {
 		if primarySentenceEnd[runes[i-1]] {
 			if runes[i-1] == '.' && isAbbreviationDot(runes, i-1) {
@@ -513,6 +529,16 @@ func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 			}
 			after := i
 			if after < len(runes) && unicode.IsSpace(runes[after]) {
+				return after
+			}
+		}
+	}
+
+	// Clause boundary: ,;: — weaker than sentence but better than hard cut.
+	for i := maxEnd; i > start+1; i-- {
+		if clauseEndRunes[runes[i-1]] {
+			after := i
+			if after < len(runes) && (unicode.IsSpace(runes[after]) || runes[after] == '\n') {
 				return after
 			}
 		}
@@ -863,6 +889,20 @@ func snapRuneToSentenceEnd(runes []rune, start, end, minSize int) int {
 		return end
 	}
 
+	// Pass 0: CJK sentence boundaries (。！？) — no trailing space required.
+	// These must be checked first because the English pass below requires
+	// whitespace after the punctuation, which CJK never has.
+	for i := end - 1; i > start; i-- {
+		r := runes[i]
+		if r == '。' || r == '！' || r == '？' {
+			boundary := i + 1
+			if boundary-start >= minSize {
+				return boundary
+			}
+			break
+		}
+	}
+
 	// Pass 1: Search backward for a primary sentence-ending rune (.!?).
 	for i := end - 1; i > start; i-- {
 		if !primarySentenceEnd[runes[i]] {
@@ -936,34 +976,58 @@ func snapFlushToSentenceBoundary(units []splitUnit, chunkSize int) ([]splitUnit,
 	var best splitPoint
 	bestSet := false
 
-	// Pass 1: primary sentence endings (.!?), excluding abbreviations.
+	// Pass 0: CJK sentence boundaries (。！？) — no trailing space required.
 	for i := len(units) - 1; i >= 0 && accumulated < maxLookback; i-- {
 		runes := []rune(units[i].text)
 		accumulated += len(runes)
 
-		for j := len(runes) - 1; j >= 1; j-- {
-			if !primarySentenceEnd[runes[j]] {
-				continue
+		for j := len(runes) - 1; j >= 0; j-- {
+			r := runes[j]
+			if r == '。' || r == '！' || r == '？' {
+				splitAt := j + 1
+				if splitAt > 0 && splitAt < len(runes) {
+					best = splitPoint{unitIdx: i, runeOff: splitAt}
+					bestSet = true
+				}
+				break
 			}
-			if runes[j] == '.' && isAbbreviationDot(runes, j) {
-				continue
-			}
-			after := j + 1
-			if after < len(runes) {
-				r := runes[after]
-				if !unicode.IsSpace(r) && r != '"' && r != '\'' && r != ')' && r != ']' && r != '}' && r != '’' && r != '”' {
+		}
+		if bestSet {
+			break
+		}
+	}
+
+	// Pass 1: primary sentence endings (.!?), excluding abbreviations.
+	if !bestSet {
+		accumulated = 0
+		for i := len(units) - 1; i >= 0 && accumulated < maxLookback; i-- {
+			runes := []rune(units[i].text)
+			accumulated += len(runes)
+
+			for j := len(runes) - 1; j >= 1; j-- {
+				if !primarySentenceEnd[runes[j]] {
 					continue
 				}
+				if runes[j] == '.' && isAbbreviationDot(runes, j) {
+					continue
+				}
+				after := j + 1
+				if after < len(runes) {
+					r := runes[after]
+					if !unicode.IsSpace(r) && r != '"' && r != '\'' && r != ')' && r != ']' && r != '}' && r != '’' && r != '”' {
+						continue
+					}
+				}
+				splitAt := after
+				for splitAt < len(runes) && (runes[splitAt] == ' ' || runes[splitAt] == '\t') {
+					splitAt++
+				}
+				if splitAt > 0 && splitAt < len(runes) {
+					best = splitPoint{unitIdx: i, runeOff: splitAt}
+					bestSet = true
+				}
+				break
 			}
-			splitAt := after
-			for splitAt < len(runes) && (runes[splitAt] == ' ' || runes[splitAt] == '\t') {
-				splitAt++
-			}
-			if splitAt > 0 && splitAt < len(runes) {
-				best = splitPoint{unitIdx: i, runeOff: splitAt}
-				bestSet = true
-			}
-			break
 		}
 	}
 
@@ -1239,7 +1303,7 @@ func populateStructuralMetadata(c *Chunk) {
 	c.CodeBlocks = codeBlocks
 	c.Images = images
 
-	meta := make(map[string]any, 6)
+	meta := make(map[string]any, 7)
 	meta["table_count"] = len(tables)
 	if len(tables) > 0 {
 		meta["table_summary"] = tableHeaderSummary(tables[0])
@@ -1250,6 +1314,9 @@ func populateStructuralMetadata(c *Chunk) {
 	meta["formula_count"] = len(formulas)
 	meta["code_block_count"] = len(codeBlocks)
 	meta["image_count"] = len(images)
+	if c.ContextHeader != "" {
+		meta["context_header"] = c.ContextHeader
+	}
 	c.Metadata = meta
 }
 

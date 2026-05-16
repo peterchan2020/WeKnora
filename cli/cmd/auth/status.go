@@ -7,14 +7,14 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Tencent/WeKnora/cli/internal/cmdutil"
-	"github.com/Tencent/WeKnora/cli/internal/format"
 	"github.com/Tencent/WeKnora/cli/internal/iostreams"
 	sdk "github.com/Tencent/WeKnora/client"
 )
 
-// StatusOptions captures the (sparse) configuration of `weknora auth status`.
-type StatusOptions struct {
-	JSONOut bool
+// authStatusFields enumerates the fields surfaced for `--json` discovery
+// on `auth status`. Single-resource shape: filter applies to data itself.
+var authStatusFields = []string{
+	"context", "user_id", "email", "tenant_id", "tenant_name",
 }
 
 // StatusService is the narrow SDK surface auth status depends on.
@@ -33,29 +33,40 @@ type statusResult struct {
 
 // NewCmdStatus builds the `weknora auth status` command.
 func NewCmdStatus(f *cmdutil.Factory) *cobra.Command {
-	opts := &StatusOptions{}
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show the active context, principal, and token state",
+		Long: `Live-check the active credential by calling /auth/me. Reports the user
+and tenant the server resolves the credential to.
+
+Exits with auth.unauthenticated when the token is invalid or missing - run
+` + "`weknora auth login`" + ` (or ` + "`auth refresh`" + ` for JWT contexts) to recover.
+For JWT contexts the SDK transparently refreshes on 401, so this command
+usually only surfaces a hard auth failure.`,
+		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, args []string) error {
+			jopts, err := cmdutil.CheckJSONFlags(c)
+			if err != nil {
+				return err
+			}
 			cli, err := f.Client()
 			if err != nil {
 				return err
 			}
-			return runStatus(c.Context(), opts, f, cli)
+			return runStatus(c.Context(), jopts, f, cli)
 		},
 	}
-	cmd.Flags().BoolVar(&opts.JSONOut, "json", false, "Output JSON envelope")
+	cmdutil.AddJSONFlags(cmd, authStatusFields)
 	return cmd
 }
 
-func runStatus(ctx context.Context, opts *StatusOptions, f *cmdutil.Factory, svc StatusService) error {
+func runStatus(ctx context.Context, jopts *cmdutil.JSONOptions, f *cmdutil.Factory, svc StatusService) error {
 	if svc == nil {
 		return cmdutil.NewError(cmdutil.CodeAuthUnauthenticated, "no SDK client available; run `weknora auth login`")
 	}
 	resp, err := svc.GetCurrentUser(ctx)
 	if err != nil {
-		return cmdutil.Wrapf(cmdutil.ClassifyHTTPError(err), err, "fetch current user")
+		return cmdutil.WrapHTTP(err, "fetch current user")
 	}
 	user := resp.Data.User
 	tenant := resp.Data.Tenant
@@ -65,22 +76,17 @@ func runStatus(ctx context.Context, opts *StatusOptions, f *cmdutil.Factory, svc
 		return err
 	}
 
-	if opts.JSONOut {
-		var tenantID uint64
+	if jopts.Enabled() {
 		result := statusResult{Context: cfg.CurrentContext}
 		if user != nil {
 			result.UserID = user.ID
 			result.Email = user.Email
 			result.TenantID = user.TenantID
-			tenantID = user.TenantID
 		}
 		if tenant != nil {
 			result.TenantName = tenant.Name
 		}
-		return cmdutil.NewJSONExporter().Write(iostreams.IO.Out, format.Success(result, &format.Meta{
-			Context:  cfg.CurrentContext,
-			TenantID: tenantID,
-		}))
+		return jopts.Emit(iostreams.IO.Out, result)
 	}
 
 	host := ""

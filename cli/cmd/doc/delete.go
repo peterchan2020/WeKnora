@@ -6,19 +6,17 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Tencent/WeKnora/cli/internal/agent"
 	"github.com/Tencent/WeKnora/cli/internal/cmdutil"
-	"github.com/Tencent/WeKnora/cli/internal/format"
 	"github.com/Tencent/WeKnora/cli/internal/iostreams"
 	"github.com/Tencent/WeKnora/cli/internal/prompt"
 )
 
-// DeleteOptions captures `weknora doc delete` flags. Yes is sourced from the
-// global -y/--yes persistent flag (gh-style; see cli/cmd/root.go).
+// docDeleteFields enumerates the fields surfaced for `--json` discovery on
+// `doc delete`. The result payload is a small {id, deleted} object.
+var docDeleteFields = []string{"id", "deleted"}
+
 type DeleteOptions struct {
-	Yes     bool
-	JSONOut bool
-	DryRun  bool
+	Yes bool // sourced from the global -y/--yes persistent flag (see cli/cmd/root.go)
 }
 
 // DeleteService is the narrow SDK surface this command depends on.
@@ -33,8 +31,8 @@ type deleteResult struct {
 	Deleted bool   `json:"deleted"`
 }
 
-// NewCmdDelete builds `weknora doc delete`. Mirrors `gh repo delete --yes`
-// confirmation pattern via the global -y/--yes persistent flag.
+// NewCmdDelete builds `weknora doc delete`. Confirmation routed through
+// the global -y/--yes persistent flag.
 func NewCmdDelete(f *cmdutil.Factory) *cobra.Command {
 	opts := &DeleteOptions{}
 	cmd := &cobra.Command{
@@ -44,49 +42,41 @@ func NewCmdDelete(f *cmdutil.Factory) *cobra.Command {
 when stdout is a TTY and --json is not set; pass -y/--yes (global flag) to skip
 the prompt (required in agent / CI / piped contexts).
 
-AI agents: This is a high-risk write. Without -y/--yes the CLI exits 10 and
-returns an envelope describing the missing confirmation. NEVER auto-pass -y
+AI agents: This is a high-risk write. Without -y/--yes the CLI exits 10
+and writes input.confirmation_required to stderr. NEVER auto-pass -y
 without the user's explicit go-ahead.`,
 		Example: `  weknora doc delete doc_abc           # interactive confirm
   weknora doc delete doc_abc -y        # no prompt
-  weknora doc delete doc_abc -y --json # envelope output`,
+  weknora doc delete doc_abc -y --json # bare {id, deleted:true} JSON`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			opts.Yes, _ = c.Flags().GetBool("yes")
-			opts.DryRun = cmdutil.IsDryRun(c)
-			if opts.DryRun {
-				return runDelete(c.Context(), opts, nil, f.Prompter(), args[0])
+			jopts, err := cmdutil.CheckJSONFlags(c)
+			if err != nil {
+				return err
 			}
+			opts.Yes, _ = c.Flags().GetBool("yes")
 			cli, err := f.Client()
 			if err != nil {
 				return err
 			}
-			return runDelete(c.Context(), opts, cli, f.Prompter(), args[0])
+			return runDelete(c.Context(), opts, jopts, cli, f.Prompter(), args[0])
 		},
 	}
-	cmd.Flags().BoolVar(&opts.JSONOut, "json", false, "Output JSON envelope")
-	agent.SetAgentHelp(cmd, "Destructively deletes one document by id. ALWAYS pass -y/--yes in agent mode (no TTY ⇒ confirm prompt fails). Returns data: {id, deleted:true}.")
+	cmdutil.AddJSONFlags(cmd, docDeleteFields)
 	return cmd
 }
 
-func runDelete(ctx context.Context, opts *DeleteOptions, svc DeleteService, p prompt.Prompter, id string) error {
-	if opts.DryRun {
-		return cmdutil.EmitDryRun(opts.JSONOut,
-			deleteResult{ID: id, Deleted: false}, nil,
-			&format.Risk{Level: format.RiskHighRiskWrite, Action: fmt.Sprintf("delete document %s", id)})
-	}
-
-	if err := cmdutil.ConfirmDestructive(p, opts.Yes, opts.JSONOut, "document", id); err != nil {
+func runDelete(ctx context.Context, opts *DeleteOptions, jopts *cmdutil.JSONOptions, svc DeleteService, p prompt.Prompter, id string) error {
+	if err := cmdutil.ConfirmDestructive(p, opts.Yes, jopts.Enabled(), "document", id); err != nil {
 		return err
 	}
 
 	if err := svc.DeleteKnowledge(ctx, id); err != nil {
-		return cmdutil.Wrapf(cmdutil.ClassifyHTTPError(err), err, "delete document %s", id)
+		return cmdutil.WrapHTTP(err, "delete document %s", id)
 	}
 
-	if opts.JSONOut {
-		risk := &format.Risk{Level: format.RiskHighRiskWrite, Action: fmt.Sprintf("deleted document %s", id)}
-		return format.WriteEnvelope(iostreams.IO.Out, format.SuccessWithRisk(deleteResult{ID: id, Deleted: true}, nil, risk))
+	if jopts.Enabled() {
+		return jopts.Emit(iostreams.IO.Out, deleteResult{ID: id, Deleted: true})
 	}
 	fmt.Fprintf(iostreams.IO.Out, "✓ Deleted document %s\n", id)
 	return nil

@@ -12,7 +12,7 @@ import (
 	sdk "github.com/Tencent/WeKnora/client"
 )
 
-// fakeChatService implements chatService for unit tests. Tests configure the
+// fakeChatService implements ChatService for unit tests. Tests configure the
 // callback driver via streamEvents (delivered in order) and observe captured
 // inputs through the exported fields.
 type fakeChatService struct {
@@ -37,7 +37,7 @@ func (f *fakeChatService) CreateSession(_ context.Context, req *sdk.CreateSessio
 		return f.createSessionResp, nil
 	}
 	// Default: return a deterministic session id derived from the title so
-	// envelope assertions don't depend on uuid generation.
+	// JSON assertions don't depend on uuid generation.
 	return &sdk.Session{ID: "sess_auto", Title: req.Title}, nil
 }
 
@@ -56,9 +56,9 @@ func (f *fakeChatService) KnowledgeQAStream(ctx context.Context, sessionID strin
 	return f.streamErr
 }
 
-// Sanity: fakeChatService must satisfy chatService. Mirrors the production
-// var _ chatService = (*sdk.Client)(nil) check at the bottom of chat.go.
-var _ chatService = (*fakeChatService)(nil)
+// Sanity: fakeChatService must satisfy ChatService. Mirrors the production
+// var _ ChatService = (*sdk.Client)(nil) check at the bottom of chat.go.
+var _ ChatService = (*fakeChatService)(nil)
 
 func TestChat_StreamMode(t *testing.T) {
 	out, errBuf := iostreams.SetForTestWithTTY(t)
@@ -73,7 +73,7 @@ func TestChat_StreamMode(t *testing.T) {
 		},
 	}
 	opts := &Options{Query: "hi", KBID: "kb_1"}
-	if err := runChat(context.Background(), opts, svc); err != nil {
+	if err := runChat(context.Background(), opts, nil, svc); err != nil {
 		t.Fatalf("runChat: %v", err)
 	}
 	got := out.String()
@@ -111,53 +111,47 @@ func TestChat_JSONMode(t *testing.T) {
 			{ResponseType: sdk.ResponseTypeComplete, Done: true},
 		},
 	}
-	opts := &Options{Query: "q", KBID: "kb_42", JSONOut: true}
-	if err := runChat(context.Background(), opts, svc); err != nil {
+	opts := &Options{Query: "q", KBID: "kb_42"}
+	if err := runChat(context.Background(), opts, &cmdutil.JSONOptions{}, svc); err != nil {
 		t.Fatalf("runChat: %v", err)
 	}
 
 	// JSON mode must NOT print the human session-hint on stderr; the session
-	// id is carried inside the envelope instead.
+	// id is carried inside the JSON object instead.
 	if errBuf.Len() != 0 {
 		t.Errorf("expected empty stderr in JSON mode, got %q", errBuf.String())
 	}
 
-	var env struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Answer             string `json:"answer"`
-			SessionID          string `json:"session_id"`
-			AssistantMessageID string `json:"assistant_message_id"`
-			KBID               string `json:"kb_id"`
-			Query              string `json:"query"`
-			References         []struct {
-				KnowledgeID string `json:"knowledge_id"`
-			} `json:"references"`
-		} `json:"data"`
+	var got struct {
+		Answer             string `json:"answer"`
+		SessionID          string `json:"session_id"`
+		AssistantMessageID string `json:"assistant_message_id"`
+		KBID               string `json:"kb_id"`
+		Query              string `json:"query"`
+		References         []struct {
+			KnowledgeID string `json:"knowledge_id"`
+		} `json:"references"`
 	}
-	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
-		t.Fatalf("decode envelope: %v\n%s", err, out.String())
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode JSON: %v\n%s", err, out.String())
 	}
-	if !env.OK {
-		t.Errorf("expected ok:true, got %s", out.String())
+	if got.Answer != "answer body" {
+		t.Errorf("answer: got %q", got.Answer)
 	}
-	if env.Data.Answer != "answer body" {
-		t.Errorf("answer: got %q", env.Data.Answer)
+	if got.SessionID != "sess_auto" {
+		t.Errorf("session_id: got %q", got.SessionID)
 	}
-	if env.Data.SessionID != "sess_auto" {
-		t.Errorf("session_id: got %q", env.Data.SessionID)
+	if got.AssistantMessageID != "msg_99" {
+		t.Errorf("assistant_message_id: got %q", got.AssistantMessageID)
 	}
-	if env.Data.AssistantMessageID != "msg_99" {
-		t.Errorf("assistant_message_id: got %q", env.Data.AssistantMessageID)
+	if got.KBID != "kb_42" {
+		t.Errorf("kb_id: got %q", got.KBID)
 	}
-	if env.Data.KBID != "kb_42" {
-		t.Errorf("kb_id: got %q", env.Data.KBID)
+	if got.Query != "q" {
+		t.Errorf("query: got %q", got.Query)
 	}
-	if env.Data.Query != "q" {
-		t.Errorf("query: got %q", env.Data.Query)
-	}
-	if len(env.Data.References) != 1 || env.Data.References[0].KnowledgeID != "k1" {
-		t.Errorf("references payload missing: %+v", env.Data.References)
+	if len(got.References) != 1 || got.References[0].KnowledgeID != "k1" {
+		t.Errorf("references payload missing: %+v", got.References)
 	}
 }
 
@@ -174,7 +168,7 @@ func TestChat_NoStreamFlag(t *testing.T) {
 		},
 	}
 	opts := &Options{Query: "q", KBID: "kb", NoStream: true}
-	if err := runChat(context.Background(), opts, svc); err != nil {
+	if err := runChat(context.Background(), opts, nil, svc); err != nil {
 		t.Fatalf("runChat: %v", err)
 	}
 	written = out.String()
@@ -193,7 +187,7 @@ func TestChat_NonTTY_AccumulateMode(t *testing.T) {
 		},
 	}
 	opts := &Options{Query: "q", KBID: "kb"}
-	if err := runChat(context.Background(), opts, svc); err != nil {
+	if err := runChat(context.Background(), opts, nil, svc); err != nil {
 		t.Fatalf("runChat: %v", err)
 	}
 	if !strings.Contains(out.String(), "piped") {
@@ -207,18 +201,18 @@ func TestChat_SessionIDProvided(t *testing.T) {
 		streamEvents: []*sdk.StreamResponse{{ResponseType: sdk.ResponseTypeComplete, Done: true}},
 	}
 	opts := &Options{Query: "q", KBID: "kb", SessionID: "sess_existing"}
-	if err := runChat(context.Background(), opts, svc); err != nil {
+	if err := runChat(context.Background(), opts, nil, svc); err != nil {
 		t.Fatalf("runChat: %v", err)
 	}
 	if svc.createCalled {
-		t.Error("CreateSession must NOT be invoked when --session-id is provided")
+		t.Error("CreateSession must NOT be invoked when --session is provided")
 	}
 	if svc.gotSessionID != "sess_existing" {
 		t.Errorf("stream sessionID: got %q want sess_existing", svc.gotSessionID)
 	}
 	// No auto-create message because the user supplied the id.
 	if strings.Contains(errBuf.String(), "session:") {
-		t.Errorf("unexpected session hint emitted with explicit --session-id: %q", errBuf.String())
+		t.Errorf("unexpected session hint emitted with explicit --session: %q", errBuf.String())
 	}
 }
 
@@ -227,7 +221,7 @@ func TestChat_KBIDRequired(t *testing.T) {
 	svc := &fakeChatService{}
 	// Run with KBID empty (bypassing the cobra resolver).
 	opts := &Options{Query: "q"}
-	err := runChat(context.Background(), opts, svc)
+	err := runChat(context.Background(), opts, nil, svc)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -247,7 +241,7 @@ func TestChat_EmptyQuery(t *testing.T) {
 	_, _ = iostreams.SetForTest(t)
 	svc := &fakeChatService{}
 	opts := &Options{Query: "", KBID: "kb"}
-	err := runChat(context.Background(), opts, svc)
+	err := runChat(context.Background(), opts, nil, svc)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -268,7 +262,7 @@ func TestChat_SDKError_PreStream(t *testing.T) {
 		streamErr: errors.New("HTTP error 401: token rejected"),
 	}
 	opts := &Options{Query: "q", KBID: "kb"}
-	err := runChat(context.Background(), opts, svc)
+	err := runChat(context.Background(), opts, nil, svc)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -290,7 +284,7 @@ func TestChat_SDKError_MidStream_AbortsAsSSE(t *testing.T) {
 		streamErr:    errors.New("connection reset"),
 	}
 	opts := &Options{Query: "q", KBID: "kb"}
-	err := runChat(context.Background(), opts, svc)
+	err := runChat(context.Background(), opts, nil, svc)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -309,7 +303,7 @@ func TestChat_ContextCancelled(t *testing.T) {
 	cancel() // simulate Ctrl-C delivered before the SDK returns.
 	svc := &fakeChatService{streamErr: context.Canceled}
 	opts := &Options{Query: "q", KBID: "kb"}
-	err := runChat(ctx, opts, svc)
+	err := runChat(ctx, opts, nil, svc)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -328,7 +322,7 @@ func TestChat_SessionCreateFails(t *testing.T) {
 		createSessionErr: errors.New("dial tcp: connection refused"),
 	}
 	opts := &Options{Query: "q", KBID: "kb"}
-	err := runChat(context.Background(), opts, svc)
+	err := runChat(context.Background(), opts, nil, svc)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -353,7 +347,7 @@ func TestChat_SessionCreate404SurfacesNotFound(t *testing.T) {
 		createSessionErr: errors.New("HTTP error 404: tenant not found"),
 	}
 	opts := &Options{Query: "q", KBID: "kb"}
-	err := runChat(context.Background(), opts, svc)
+	err := runChat(context.Background(), opts, nil, svc)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

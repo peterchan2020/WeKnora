@@ -1,231 +1,167 @@
-# Agent Integration Guide for `weknora` CLI
+# AGENTS.md
 
-> **Scope.** This file is an **operational reference** for LLM agents
-> (Claude Code, Cursor, Codex, Aider, Gemini Coder, etc.) that **invoke
-> `weknora` on a user's behalf**. It documents the wire shape, exit code,
-> and behavioral conventions an agent integration relies on.
->
-> This is **not** a contributor guide. If you are an AI coding agent
-> editing weknora's source, see the repo root `README.md` (and, if added
-> later, a separate contributor `AGENTS.md` at the repo root).
+WeKnora CLI (`weknora`) is a noun-verb wrapper around the WeKnora server API; module path `github.com/Tencent/WeKnora/cli`. This file is the developer guide for coding agents and human contributors editing the CLI. The user-facing wire contract (output shape, exit codes, error format) lives in [README.md](README.md).
 
-`weknora` is designed to be agent-friendly: error messages, output format,
-and flag design follow conventions agents can rely on. Wire-contract
-breaking changes are flagged in their PR description and the corresponding
-`weknora --version` bump — agents should pin a known-good version and
-re-validate against `--help` output on upgrade.
+## Build, Test, and Lint
 
-The model: **gh CLI** as the human-side north star, **lark-cli (larksuite)**
-as the agent-affordance reference. The "Output contract" and "Behavioral
-rules" sections below are the self-contained specification of that
-decision; everything an integrator needs is in this document.
+```bash
+go build -o weknora .                              # build (from cli/)
+go test -count=1 ./...                             # unit + contract tests
+go test -run TestFoo ./internal/format/            # single test
+go test ./acceptance/contract/ -args -update       # refresh wire goldens
+go test -tags acceptance_e2e ./acceptance/e2e/...  # live-server e2e (gated by env)
+go vet ./...
+```
 
----
+Both `go test -count=1 ./...` and `go vet ./...` must pass before committing.
 
-## Output contract
+## Architecture
 
-### Streams
+Entry point: `cmd/main.go` → `cmd.Execute()` → `cmd.NewRootCmd(cmdutil.New())`.
 
-- **stdout** is the data channel: JSON envelope (with `--json`) or
-  human-formatted output.
-- **stderr** is logs / progress / warnings / agent guidance footnotes.
-  Never parse stderr for data.
+Key packages:
 
-A non-empty stderr does **not** mean failure — read the exit code instead.
+- `cmd/<noun>/` — cobra command implementations, one subdir per noun
+- `internal/cmdutil/` — `Factory`, `JSONOptions`, typed `Error`, exit-code mapping, destructive-write confirm, KB id-or-name resolve
+- `internal/format/` — bare JSON emitter (`WriteJSON` / `WriteJSONFiltered`)
+- `internal/iostreams/` — global IO singleton + TTY detection + `SetForTest` swap
+- `internal/secrets/` — `Store` interface; `KeyringStore` primary, `FileStore` 0600 fallback, `MemStore` for tests
+- `internal/prompt/` — `TTYPrompter` (huh-based, password no-echo) + `AgentPrompter` (non-TTY no-prompt sentinel)
+- `internal/sse/` — `Accumulator` for chat / agent invoke SSE streams
+- `internal/mcp/` — curated stdio MCP server (wired by `cmd/mcp/serve.go`)
+- `client/` (parent module) — generated SDK
 
-### JSON envelope
+## Command Structure
 
-When `--json` is set, stdout contains exactly one envelope:
+A command `weknora foo bar` lives in `cmd/foo/bar.go` with `bar_test.go`.
 
-```jsonc
-{
-  "ok": true,                 // false on failure; check this first
-  "data": { /* command-specific payload */ },
-  "error": { "code": "...", "message": "...", "hint": "..." },  // iff ok=false
-  "_meta": { "request_id": "...", "kb_id": "..." },             // optional
-  "risk": { "level": "high-risk-write", "action": "..." },      // write commands
-  "dry_run": false                                              // true on --dry-run
+### Canonical Examples
+
+- **Command + tests**: `cmd/kb/list.go` and `list_test.go`
+- **Destructive write + confirm protocol**: `cmd/kb/delete.go`
+- **SSE streaming command**: `cmd/chat/chat.go`
+- **Factory wiring**: `internal/cmdutil/factory.go`
+
+### The Options + Narrow Service Pattern
+
+Every command follows this structure (see `cmd/kb/list.go`):
+
+1. `Options` struct with flag-bound fields
+2. `Service` interface declaring only the SDK methods this command calls. `*sdk.Client` satisfies it implicitly via duck typing.
+3. `NewCmd<Verb>(f *cmdutil.Factory) *cobra.Command` constructor — flag registration + `cmdutil.AddJSONFlags`
+4. Separate `run<Verb>(ctx, opts, jopts, svc, args...)` with the business logic — the test injection point
+
+Key rules:
+
+- Each command owns its own `Service` interface; do NOT share interfaces across `cmd/*` packages. Per-file dependency graph is the goal.
+- Lazy-init `f.Client()` / `f.Secrets()` / `f.Prompter()` inside `RunE`, not the constructor (else `--help` forces auth).
+- Required flags: `_ = cmd.MarkFlagRequired("name")` — cobra returns the error only on registration-time typo.
+- New subtrees register in `cmd/root.go NewRootCmd`. Verb subtrees register their leaves in the subtree's own `NewCmd`.
+
+### Command Examples and Help Text
+
+Use a Go raw string with `weknora` as the example prefix. Keep one-line `Short` ≤ 70 chars; `Long` may run multi-paragraph; `Example` always includes `weknora` so copy-paste works:
+
+```go
+Example: `  weknora kb view <id>
+  weknora kb view kb_abc --json
+  weknora kb view kb_abc --json=id,name`,
+```
+
+### JSON Output
+
+Add `--json` / `--jq` via `cmdutil.AddJSONFlags(cmd, fieldNames)`. In `RunE`:
+
+```go
+if jopts.Enabled() {
+    return jopts.Emit(iostreams.IO.Out, result)
 }
 ```
 
-This snippet is illustrative. Fields are added (never renamed or repurposed)
-within a minor version, and agents must not error on unknown keys. The
-authoritative envelope shape lives in `cli/internal/format/envelope.go`.
+`Emit` is the single source for the bare-JSON contract — it honors `--json=fields,...` projection and `--jq <expr>` filtering. Never call `format.WriteJSON*` directly from a command. See `cmd/kb/list.go`.
 
-### Error codes (closed registry)
+### Destructive Writes
 
-`error.code` is a `namespace.snake_case` string from a closed registry in
-`cli/internal/cmdutil/errors.go` `AllCodes()`. An acceptance test enforces
-that every code referenced in `cli/cmd/` is registered.
+Commands that delete / empty / overwrite call `cmdutil.ConfirmDestructive(p, opts.Yes, jopts.Enabled(), what, id)` before mutation. In non-TTY OR `--json` mode without `-y`, it returns `CodeInputConfirmationRequired` → exit 10. See `internal/cmdutil/confirm.go`.
 
-Categories: `auth.*` / `resource.*` / `input.*` / `server.*` / `network.*` /
-`local.*` / `mcp.*`.
+## Testing
 
-`error.hint` provides a deterministic next-step hint agents can follow
-without natural-language parsing.
+### Narrow Service Fakes
 
-### Exit codes
+Each command's `runX(ctx, opts, jopts, svc, ...)` takes its interface, not `*sdk.Client`. Tests inject plain-struct fakes:
 
-| Code | Meaning | Agent action |
-|---|---|---|
-| `0` | Success | Continue |
-| `1` | Typed error (see envelope.error.code) | Read code, decide retry/abort |
-| `2` | Flag/argument validation error | Re-check `weknora <command> --help` |
-| `10` | **Confirmation required** for high-risk write | Ask the human, retry with `-y` only after explicit approval |
-| `130` | Cancelled (SIGINT / Ctrl-C) | Stop, do not retry |
-
-The exit-10 protocol mirrors `lark-cli`'s
-([source](https://github.com/larksuite/cli/blob/main/skills/lark-shared/SKILL.md))
-"high-risk write requires confirmation" model. **Never bypass exit 10 by
-auto-passing `-y` without explicit user permission.**
-
----
-
-## Command surface
-
-Discover the command tree the same way human users do:
-
-```bash
-weknora --help                       # top-level
-weknora kb --help                    # subtree
-weknora kb delete --help             # single command flags
+```go
+type fakeBarSvc struct {
+    gotID string
+    resp  *sdk.Bar
+    err   error
+}
+func (f *fakeBarSvc) GetBar(_ context.Context, id string) (*sdk.Bar, error) {
+    f.gotID = id
+    return f.resp, f.err
+}
 ```
 
-The command tree follows `<noun> <verb>` (gh style). Verbs are:
+No mocking library; the narrow-interface design makes fakes 5 lines each.
 
-| Verb | Semantics | Example |
-|---|---|---|
-| `list` | Multi-resource read | `kb list` |
-| `view` | Single-resource read | `kb view <id>` |
-| `create` | Create resource | `kb create --name X` |
-| `delete` | Destructive remove | `kb delete <id> -y` |
-| `upload` | Bulk write content | `doc upload <file>` |
-| `use` | Switch active selection | `context use <name>` |
+### IOStreams in Tests
 
-`auth` subtree: `login` / `logout` / `list` / `status`. Mirrors gh's
-`auth login / logout / status / switch / list`-style surface; weknora uses
-`context use` instead of `auth switch` because contexts carry host + tenant
-on top of credentials. Token refresh is deferred to v0.3 (will land as
-transparent 401 retry in the SDK plus an explicit `auth refresh` command).
+```go
+out, errBuf := iostreams.SetForTest(t)  // bytes.Buffer sinks, non-TTY
+ios, _ := iostreams.SetForTestWithTTY(t) // simulate terminal
+```
 
-Top-level RAG / connectivity verbs: `chat`, `search`, `api`, `link`,
-`auth`, `doctor`, `version`.
+### Confirm Prompts
 
-`doctor` is a deliberate divergence from gh / lark (neither ships a
-health-check command); the precedent is `flutter doctor` / `brew doctor`.
-Kept because RAG deployments routinely break on misconfigured embeddings,
-storage backends, and credentials, and a structured 4-status envelope
-(ok/warn/fail/skip) is the cleanest agent-readable surface for that.
+Use `testutil.ConfirmPrompter{Answer: bool, Err: error}` from `internal/testutil/`. Single source for the prompt double — do NOT re-define `confirmPrompter` per package.
 
----
+### Assertions
 
-## Behavioral rules
+Use `testify`. Prefer `require` (not `assert`) for error checks so the test halts immediately, and `assert` for value comparisons:
 
-These mirror lark-cli's per-command `Tips`. Per-command guidance also
-appears in each command's `--help` output (under "AI agents:").
+```go
+require.NoError(t, err)
+require.ErrorAs(t, err, &typed)
+assert.Equal(t, "expected", actual)
+```
 
-1. **Pass `-y/--yes`** on `kb delete` / `doc delete` / `auth logout` when
-   running headless. Without it, you will get exit 10. **Never auto-add
-   `-y`** without the user's explicit go-ahead — the exit-10 protocol is
-   the one explicit guard against unintended writes.
-2. **Prefer typed commands over `weknora api`** for known endpoints.
-   Fallback to `weknora api` only when no typed command covers the call.
-3. **For chat, prefer `--no-stream --json`** in agent contexts. Streaming
-   tokens to stdout makes JSON envelope parsing impossible.
-4. **Honor `--dry-run`** — when the user passes it, don't follow up with
-   the real command unless explicitly asked. The dry-run envelope is the
-   answer.
-5. **`link` writes to the user's working directory** — only run it when
-   the user invoked it, not as a side effect of unrelated automation.
+### Acceptance: Wire-Shape Goldens
 
-(Additional safety guidance — e.g. "do not switch context unless the
-user asked" — is documented in the affected command's own `--help`.)
+`acceptance/contract/wire_test.go` drives the in-process cobra tree against `httptest.Server` fixtures and compares stdout to `acceptance/testdata/wire/<case>.json`. Error-path cases also assert stderr contains the typed code substring (e.g. `auth.unauthenticated`). Update goldens with `go test ./acceptance/contract/ -args -update`.
 
----
+### Table-Driven Tests
 
-## Auto-detection of agent environments
+Use for flag validation, error classification, parser edge cases. See `internal/cmdutil/exit_test.go` and `cmd/kb/list_test.go`.
 
-`weknora` checks these environment variables (case-sensitive):
+```go
+tests := []struct{ name string; ...}{
+    {name: "descriptive case", ...},
+}
+for _, tt := range tests {
+    t.Run(tt.name, func(t *testing.T) { /* arrange, act, assert */ })
+}
+```
 
-| Env var | Detected agent name |
-|---|---|
-| `CLAUDECODE` | `claude-code` |
-| `CURSOR_AGENT` | `cursor` |
+## Code Style
 
-When any is set, `weknora --help` appends the command's `agent_help`
-annotation. **No behavior change** — this is help-text rendering only.
+- Add godoc to every exported function, type, and constant. Explain *why*, not *what* — the name already says *what*.
+- Don't comment to restate the code. Delete comments that narrate the next line.
+- Don't reference task numbers, commit SHAs, or version tags in inline comments — they belong in CHANGELOG or git log.
+- Never paste em-dashes (—) into Go source; use ASCII `-` or rewrite. (Markdown docs may use em-dashes.)
+- Don't add a helper for a single caller — inline.
 
-To suppress detection (e.g. running `weknora` interactively from inside
-Claude Code without the agent footer): `WEKNORA_NO_AGENT_AUTODETECT=1`.
+## Error Handling
 
-The omnibus `--agent` mode-switch flag that briefly existed in early v0.2
-was removed: gh / kubectl / aws / docker / flyctl all decline this kind
-of flag, since per-command `--json` + TTY auto-detect cover the same
-ground without an extra global switch. Stripe's `DetectAIAgent` (the
-inspiration) only tags User-Agent for telemetry, never flips behavior;
-`weknora` now follows that narrower scope.
+Typed error helpers in `internal/cmdutil/errors.go`:
 
----
+- `cmdutil.NewError(code, msg)` — fresh typed error
+- `cmdutil.WrapHTTP(err, format, args...)` — wrap an SDK error + classify from HTTP status (404 → `resource.not_found`, 401 → `auth.unauthenticated`, …). Use at every SDK call site.
+- `cmdutil.Wrapf(code, err, format, args...)` — explicit wrap with a chosen code
+- `cmdutil.NewFlagError(err)` — flag / argument problem → exit 2
+- `cmdutil.SilentError` — exit 1 without printing (when output already emitted)
+- `cmd.MarkFlagsMutuallyExclusive("a", "b")` — cobra-level mutex
 
-## Architecture decisions
+Errors print to STDERR via `cmdutil.PrintError(w, err)` as `code: msg\nhint: ...`. STDOUT stays bare JSON or empty on failure, so `--json | jq` pipelines never have to filter error shapes.
 
-A handful of decisions are referenced inline in the source as `ADR-N`. They
-live here, alongside the contract they shape.
+User-facing exit-code mapping lives in [README.md "Exit codes"](README.md#exit-codes). When adding a new `ErrorCode` constant, also append to `AllCodes()` so the acceptance contract picks it up.
 
-**ADR-3 — `gh` CLI as the primary mainstream north star.** When weknora's
-v0.0/v0.1 surface was audited against gh / kubectl / cargo / npm / git /
-docker / flyctl / vercel / supabase / brew, gh emerged as the closest fit
-for an opinionated noun-verb tool with a stable JSON envelope and an
-agent-aware error model. Documented deviations:
-
-- `link` (project-binding) borrows from `vercel link` / `netlify link`
-  rather than gh's per-host config model — a `<cwd>/.weknora/project.yaml`
-  walk-up matches how RAG users scope work to a specific knowledge base.
-- `chat` / `search` are domain-specific verbs gh has no analog for.
-- `context use` (kubectl idiom) instead of gh's `auth switch` — weknora's
-  context bundles host + tenant + credential, which is more than gh's
-  per-host account model.
-- `doctor` (flutter / brew idiom) instead of gh's `status` (which is an
-  activity feed, different concept) — RAG deployments routinely break on
-  misconfigured embeddings / storage / credentials, so a structured
-  4-status diagnostic is the agent-readable surface for that.
-
-Verb canon: `list / view / create / delete / upload / use` (all gh-canonical).
-
-**ADR-4 — Factory closures + narrow Service interfaces.** `cmdutil.Factory`
-exposes four lazy closures (Config / Client / Prompter / Secrets) that
-commands may invoke, but each subcommand declares its own narrow `Service`
-interface for the SDK calls it actually makes. The production `*sdk.Client`
-satisfies these implicitly via duck typing; tests inject fakes. Splitting
-the boundaries this way means a subcommand's test can stand up an
-`httptest.Server` (or a hand-rolled struct) without standing up the full
-SDK, and the dependency graph of any one command is visible in one file.
-
----
-
-## Known limitations
-
-The following classes of failure currently surface as `error.code = "network.error"`
-with `context deadline exceeded` rather than a precise typed code. A future
-release will introduce a `precondition.*` namespace (server returns HTTP 412
-with a typed remediation body before opening the SSE / streaming response):
-
-- `weknora chat` when no chat model is configured for the active tenant
-- `weknora search` when no retriever / vector store is configured
-- `weknora doc upload` when no storage engine is selected for the KB
-
-Workaround until then: if a chat / search / upload call times out without
-producing a first-byte response, check the server's tenant configuration
-(LLM / vector store / storage engine) before retrying. A planned
-`weknora doctor --server-config` will probe these directly.
-
----
-
-## Reporting issues
-
-If the CLI's behavior contradicts this document, that is a bug. File at
-https://github.com/Tencent/WeKnora/issues with:
-
-- The exact command line
-- `weknora --version` output
-- The envelope you got vs the envelope this document promises

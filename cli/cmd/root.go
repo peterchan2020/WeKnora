@@ -11,6 +11,7 @@ import (
 	apicmd "github.com/Tencent/WeKnora/cli/cmd/api"
 	"github.com/Tencent/WeKnora/cli/cmd/auth"
 	chatcmd "github.com/Tencent/WeKnora/cli/cmd/chat"
+	chunkcmd "github.com/Tencent/WeKnora/cli/cmd/chunk"
 	contextcmd "github.com/Tencent/WeKnora/cli/cmd/context"
 	"github.com/Tencent/WeKnora/cli/cmd/doc"
 	"github.com/Tencent/WeKnora/cli/cmd/doctor"
@@ -29,7 +30,7 @@ import (
 func Execute() int {
 	root := NewRootCmd(cmdutil.New())
 	if err := root.Execute(); err != nil {
-		// Errors go to stderr (matches gh/aws/stripe). Stdout stays
+		// Errors go to stderr. Stdout stays
 		// empty (or holds partial success the command produced) so
 		// downstream `--json | jq` pipelines never filter error shapes
 		// out of the success stream. The typed exit code (3/4/5/6/7/10)
@@ -130,6 +131,7 @@ hybrid searches against a WeKnora server from your shell or an AI agent.`,
 	cmd.AddCommand(chatcmd.NewCmd(f))
 	cmd.AddCommand(sessioncmd.NewCmd(f))
 	cmd.AddCommand(agentcmd.NewCmd(f))
+	cmd.AddCommand(chunkcmd.NewCmdChunk(f))
 	cmd.AddCommand(mcpcmd.NewCmd(f))
 	return cmd
 }

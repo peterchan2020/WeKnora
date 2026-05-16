@@ -26,9 +26,9 @@ Key packages:
 - `internal/format/` — bare JSON emitter (`WriteJSON` / `WriteJSONFiltered`)
 - `internal/iostreams/` — global IO singleton + TTY detection + `SetForTest` swap
 - `internal/secrets/` — `Store` interface; `KeyringStore` primary, `FileStore` 0600 fallback, `MemStore` for tests
-- `internal/prompt/` — `TTYPrompter` (huh-based, password no-echo) + `AgentPrompter` (non-TTY no-prompt sentinel)
+- `internal/prompt/` — `TTYPrompter` (password no-echo) + `AgentPrompter` (non-TTY no-prompt sentinel)
 - `internal/sse/` — `Accumulator` for chat / agent invoke SSE streams
-- `internal/mcp/` — curated stdio MCP server (wired by `cmd/mcp/serve.go`)
+- `internal/mcp/` — curated 10-tool stdio MCP server (wired by `cmd/mcp/serve.go`); see [MCP tool surface](#mcp-tool-surface) for the curation rationale and inventory
 - `client/` (parent module) — generated SDK
 
 ## Command Structure
@@ -164,4 +164,55 @@ Typed error helpers in `internal/cmdutil/errors.go`:
 Errors print to STDERR via `cmdutil.PrintError(w, err)` as `code: msg\nhint: ...`. STDOUT stays bare JSON or empty on failure, so `--json | jq` pipelines never have to filter error shapes.
 
 User-facing exit-code mapping lives in [README.md "Exit codes"](README.md#exit-codes). When adding a new `ErrorCode` constant, also append to `AllCodes()` so the acceptance contract picks it up.
+
+## MCP Tool Surface
+
+WeKnora's MCP server exposes a curated read-only tool surface. Many MCP servers in the wild ship write / mutation operations on by default and rely on credential-scope or sandbox restrictions for safety. WeKnora opts for curation instead: the server side doesn't yet enforce per-token scope, so an agent holding a user's token has full write access. Until server-side scope ships, the CLI keeps mutation tools out of the MCP surface as a belt-and-braces second line of defense. When server scope arrives this stance can loosen.
+
+The curated 10 tools (`cli/internal/mcp/tools.go`):
+
+| Tool | Purpose |
+| --- | --- |
+| `kb_list` | list knowledge bases |
+| `kb_view` | fetch a knowledge base by id |
+| `doc_list` | list documents in a kb (paginated, status-filterable) |
+| `doc_view` | fetch a document by id |
+| `doc_download` | download raw bytes (1 MiB cap, base64 for binary) |
+| `chunk_list` | list chunks of a document for RAG retrieval debug |
+| `search_chunks` | hybrid (vector + keyword) retrieval |
+| `chat` | stream a RAG answer; auto-creates a session if absent |
+| `agent_list` | list custom agents |
+| `agent_invoke` | run a query through a custom agent |
+
+Adding a tool is a deliberate API expansion — the agent-callable surface is the reason this CLI ships an MCP server, not its CLI command list, so the registration list in `registerTools` is maintained by hand.
+
+## Command surface design SOP
+
+Before specifying any CLI command, do this in order:
+
+1. `grep -A 50 "type Foo struct" client/foo.go` — dump SDK request/response schemas.
+2. List every field with type and source line.
+3. For each field, decide: hot-path flag / config-file only / hidden / never-expose.
+4. Cross-check pagination signatures: an SDK `(ctx, id, page, pageSize)` shape demands `--limit` + `--all-pages` + `--page-size` on the CLI side.
+5. ONLY THEN consult mainstream CLI conventions to choose flag names, positionals, mutex, and confirm semantics.
+6. Decide which fields are "top use case" (flag) / "advanced" (`--config-file` or escape hatch via `weknora api`). Don't try to flag-cover every SDK field — mature CLIs that curate ship a tighter surface; CLIs that 1:1 mirror their API pay the UX cost.
+
+Rationale: earlier drafts produced three categories of schema errors — fields that didn't exist on the underlying SDK, wrong field counts in user-facing docs, and missing pagination flags — that all stemmed from "design from convention, not from SDK." The fix is canonical: the SDK schema is the ground truth; convention decides names and shapes around that ground truth.
+
+## CRUD command flag canon
+
+CRUD commands follow the **hard-required-flags** pattern: every required input is a flag or positional, and a missing one yields an immediate `input.invalid_argument` exit. The contrast is **TTY-prompts-fill**, where missing input opens an interactive prompt; that pattern is reserved for `auth login` (the one command where a human must be at the terminal).
+
+Required-input idioms in this codebase:
+
+- Positional required: `cobra.ExactArgs(N)` or `cobra.MinimumNArgs(1)`
+- Flag required: `cmd.MarkFlagRequired("flag")`
+- Custom required (e.g., `agent edit` needs at-least-one-edit-flag): RunE-level validation that returns `input.invalid_argument`
+- Mutex: `cmd.MarkFlagsMutuallyExclusive("a", "b")`
+
+Reasons hard-required-flags is the v0.5+ default:
+
+- Admin / debug commands have no natural human-interactive prompt to lean on.
+- Agent-friendly: MCP callers do not stall waiting for stdin prompts.
+- Consistent with every existing non-auth WeKnora command.
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -39,6 +40,13 @@ type agentService interface {
 	AgentQAStreamWithRequest(ctx context.Context, sessionID string, req *sdk.AgentQARequest, cb sdk.AgentEventCallback) error
 }
 
+// chunkListService is the narrow surface chunk_list depends on. Kept
+// separate from knowledgeService because the chunk subtree is its own
+// domain on the server side (/api/v1/chunks/...).
+type chunkListService interface {
+	ListKnowledgeChunks(ctx context.Context, knowledgeID string, page, pageSize int) ([]sdk.Chunk, int64, error)
+}
+
 // agentInvokeService composes the two SDK methods agent_invoke needs
 // (CreateSession for the auto-session path + AgentQAStreamWithRequest
 // for the run itself). Declared here alongside the per-domain
@@ -49,7 +57,7 @@ type agentInvokeService interface {
 	AgentQAStreamWithRequest(ctx context.Context, sessionID string, req *sdk.AgentQARequest, cb sdk.AgentEventCallback) error
 }
 
-// registerTools wires the curated 9 tools onto server. Adding a tool here
+// registerTools wires the curated 10 tools onto server. Adding a tool here
 // is a deliberate API expansion - the agent-callable surface is the
 // reason this CLI ships an MCP server, not its CLI command list, so this
 // list must be maintained by hand.
@@ -63,6 +71,7 @@ func registerTools(server *mcpsdk.Server, svc ServiceClient) {
 	addChat(server, svc)
 	addAgentList(server, svc)
 	addAgentInvoke(server, svc)
+	addChunkList(server, svc)
 }
 
 // ---- kb_list -------------------------------------------------------------
@@ -114,10 +123,16 @@ func addKBView(server *mcpsdk.Server, svc knowledgeBaseService) {
 // ---- doc_list ------------------------------------------------------------
 
 type docListInput struct {
-	KBID     string `json:"kb_id" jsonschema:"knowledge base ID"`
-	Page     int    `json:"page,omitempty" jsonschema:"1-indexed page number; defaults to 1"`
-	PageSize int    `json:"page_size,omitempty" jsonschema:"items per page (1..1000); defaults to 20"`
-	Status   string `json:"status,omitempty" jsonschema:"filter by parse status: pending | processing | completed | failed"`
+	KBID      string `json:"kb_id" jsonschema:"knowledge base ID"`
+	Page      int    `json:"page,omitempty" jsonschema:"1-indexed page number; defaults to 1"`
+	PageSize  int    `json:"page_size,omitempty" jsonschema:"items per page (1..1000); defaults to 20"`
+	Status    string `json:"status,omitempty" jsonschema:"filter by parse status: pending | processing | completed | failed"`
+	Keyword   string `json:"keyword,omitempty" jsonschema:"server-side substring filter (case-sensitive LIKE against title / file_name); leave empty to skip"`
+	FileType  string `json:"file_type,omitempty" jsonschema:"filter by file extension (e.g. pdf, md)"`
+	Source    string `json:"source,omitempty" jsonschema:"filter by ingestion source (e.g. api, web)"`
+	TagID     string `json:"tag_id,omitempty" jsonschema:"filter by tag association"`
+	StartTime string `json:"start_time,omitempty" jsonschema:"include docs with updated_at >= this RFC3339 timestamp (e.g. 2006-01-02T15:04:05Z)"`
+	EndTime   string `json:"end_time,omitempty" jsonschema:"include docs with updated_at <= this RFC3339 timestamp (e.g. 2006-01-02T15:04:05Z)"`
 }
 
 type docListOutput struct {
@@ -130,7 +145,7 @@ type docListOutput struct {
 func addDocList(server *mcpsdk.Server, svc knowledgeService) {
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "doc_list",
-		Description: "List documents in a knowledge base, with pagination and optional parse-status filter. Returns items[] with id, file_name, title, parse_status, size, updated_at - plus the page/total metadata.",
+		Description: "List documents in a knowledge base, with pagination and optional filters (parse-status, keyword, file_type, source, tag_id, start_time/end_time on updated_at). Returns items[] with id, file_name, title, parse_status, size, updated_at - plus the page/total metadata.",
 	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in docListInput) (*mcpsdk.CallToolResult, docListOutput, error) {
 		if in.KBID == "" {
 			return nil, docListOutput{}, fmt.Errorf("kb_id is required")
@@ -146,8 +161,28 @@ func addDocList(server *mcpsdk.Server, svc knowledgeService) {
 		if size > 1000 {
 			return nil, docListOutput{}, fmt.Errorf("page_size must be in 1..1000")
 		}
-		items, total, err := svc.ListKnowledgeWithFilter(ctx, in.KBID, page, size,
-			sdk.KnowledgeListFilter{ParseStatus: in.Status})
+		filter := sdk.KnowledgeListFilter{
+			ParseStatus: in.Status,
+			Keyword:     in.Keyword,
+			FileType:    in.FileType,
+			Source:      in.Source,
+			TagID:       in.TagID,
+		}
+		if in.StartTime != "" {
+			t, err := time.Parse(time.RFC3339, in.StartTime)
+			if err != nil {
+				return nil, docListOutput{}, fmt.Errorf("start_time must be RFC3339 (e.g. 2006-01-02T15:04:05Z), got %q", in.StartTime)
+			}
+			filter.StartTime = t
+		}
+		if in.EndTime != "" {
+			t, err := time.Parse(time.RFC3339, in.EndTime)
+			if err != nil {
+				return nil, docListOutput{}, fmt.Errorf("end_time must be RFC3339 (e.g. 2006-01-02T15:04:05Z), got %q", in.EndTime)
+			}
+			filter.EndTime = t
+		}
+		items, total, err := svc.ListKnowledgeWithFilter(ctx, in.KBID, page, size, filter)
 		if err != nil {
 			return nil, docListOutput{}, fmt.Errorf("list documents: %w", err)
 		}
@@ -275,6 +310,7 @@ func addSearchChunks(server *mcpsdk.Server, svc knowledgeService) {
 		}
 		results, err := svc.HybridSearch(ctx, in.KBID, &sdk.SearchParams{
 			QueryText:        in.Query,
+			MatchCount:       limit,
 			VectorThreshold:  in.VectorThreshold,
 			KeywordThreshold: in.KeywordThreshold,
 		})
@@ -415,7 +451,7 @@ func addAgentInvoke(server *mcpsdk.Server, svc agentInvokeService) {
 			Channel:      "api",
 		}
 		// Auto-create session if not supplied. Sessions are agent-
-		// agnostic at creation (Q3 - verified against server source).
+		// agnostic at creation (verified against server source).
 		sessionID := in.SessionID
 		if sessionID == "" {
 			sess, err := svc.CreateSession(ctx, &sdk.CreateSessionRequest{Title: "weknora mcp agent_invoke"})
@@ -441,6 +477,62 @@ func addAgentInvoke(server *mcpsdk.Server, svc agentInvokeService) {
 			Thinking:   acc.Thinking(),
 			SessionID:  sessionID,
 			AgentID:    in.AgentID,
+		}, nil
+	})
+}
+
+// ---- chunk_list ----------------------------------------------------------
+
+type chunkListInput struct {
+	DocID string `json:"doc_id" jsonschema:"document (knowledge entry) ID"`
+	Limit int    `json:"limit,omitempty" jsonschema:"max chunks to return (1..1000); defaults to 50"`
+}
+
+type chunkListOutput struct {
+	Chunks           []sdk.Chunk `json:"chunks"`
+	Total            int64       `json:"total"`
+	TruncatedAtLimit bool        `json:"truncated_at_limit"`
+}
+
+// chunkListDefaultLimit + chunkListMaxLimit mirror the schema's default+max.
+// MCP schema deliberately exposes only `limit`, not the CLI's full
+// --limit/--page/--page-size triple: LLM agents typically need a single
+// bounded fetch, not pagination workflows. Above 1000, fall back to the CLI.
+const (
+	chunkListDefaultLimit = 50
+	chunkListMaxLimit     = 1000
+)
+
+func addChunkList(server *mcpsdk.Server, svc chunkListService) {
+	mcpsdk.AddTool(server, &mcpsdk.Tool{
+		Name:        "chunk_list",
+		Description: "List chunks of a knowledge document for RAG retrieval debug. Returns at most `limit` chunks starting from ChunkIndex 0; if total chunks exceed limit, truncated_at_limit=true signals the agent to fall back to the CLI for paginated retrieval.",
+	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in chunkListInput) (*mcpsdk.CallToolResult, chunkListOutput, error) {
+		if in.DocID == "" {
+			return nil, chunkListOutput{}, fmt.Errorf("doc_id is required")
+		}
+		// `limit` is typed as int by chunkListInput, so the SDK rejects
+		// non-numeric values at schema validation (e.g. "limit":"50")
+		// before this handler runs. Here we only default+clamp the
+		// already-decoded value.
+		limit := in.Limit
+		if limit < 1 {
+			limit = chunkListDefaultLimit
+		}
+		if limit > chunkListMaxLimit {
+			limit = chunkListMaxLimit
+		}
+		chunks, total, err := svc.ListKnowledgeChunks(ctx, in.DocID, 1, limit)
+		if err != nil {
+			return nil, chunkListOutput{}, fmt.Errorf("list knowledge chunks: %w", err)
+		}
+		if chunks == nil {
+			chunks = []sdk.Chunk{}
+		}
+		return nil, chunkListOutput{
+			Chunks:           chunks,
+			Total:            total,
+			TruncatedAtLimit: total > int64(limit),
 		}, nil
 	})
 }

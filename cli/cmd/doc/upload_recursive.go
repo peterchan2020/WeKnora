@@ -32,6 +32,19 @@ func runUploadRecursive(ctx context.Context, opts *UploadOptions, jopts *cmdutil
 			Hint:    "drop --name or upload files one at a time",
 		}
 	}
+	// URL-mode-only flags are not meaningful for a directory walk;
+	// rejectURLOnlyFlags is the single source of truth shared with
+	// file-mode upload.
+	if err := rejectURLOnlyFlags(opts); err != nil {
+		return err
+	}
+	// Parse --metadata up front so a malformed value aborts before the
+	// first SDK call - otherwise a typo in `key=value` would only surface
+	// per-file as repeated identical errors.
+	meta, err := parseMetadataKV(opts.Metadata)
+	if err != nil {
+		return err
+	}
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -70,8 +83,9 @@ func runUploadRecursive(ctx context.Context, opts *UploadOptions, jopts *cmdutil
 
 	var uploaded, failed []uploadOutcome
 	var firstFailCode cmdutil.ErrorCode
+	channel := effectiveChannel(opts)
 	for _, p := range matches {
-		k, err := svc.CreateKnowledgeFromFile(ctx, kbID, p, nil, nil, "", uploadChannel)
+		k, err := svc.CreateKnowledgeFromFile(ctx, kbID, p, meta, opts.EnableMultimodel, "", channel)
 		if err != nil {
 			code := cmdutil.ClassifyHTTPError(err)
 			if firstFailCode == "" {

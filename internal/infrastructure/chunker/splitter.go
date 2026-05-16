@@ -1200,16 +1200,27 @@ func mergeUnits(units []splitUnit, chunkSize, chunkOverlap int) []Chunk {
 				if len(flushed) > 0 {
 					chunks = append(chunks, buildChunk(flushed, len(chunks)))
 				}
+				// Always prepend overlap from the flushed portion so the
+				// next chunk carries context across the boundary.
+				overlapUnits, overlapLen := computeOverlap(flushed, chunkOverlap, chunkSize, uLen)
 				if len(carry) > 0 {
-					// Carry-over from sentence snap: use as the next chunk's base.
-					current = carry
-					curLen = 0
-					for _, cu := range carry {
-						curLen += runeLen(cu.text)
+					if overlapLen > 0 {
+						current = append(overlapUnits, carry...)
+						curLen = overlapLen
+						for _, cu := range carry {
+							curLen += runeLen(cu.text)
+						}
+					} else {
+						current = carry
+						curLen = 0
+						for _, cu := range carry {
+							curLen += runeLen(cu.text)
+						}
 					}
 				} else {
-					// No sentence boundary found — fall back to overlap-based continuation.
-					current, curLen = computeOverlap(current, chunkOverlap, chunkSize, uLen)
+					// No carry from sentence snap — use overlap-based continuation.
+					current = overlapUnits
+					curLen = overlapLen
 				}
 
 				// Shrink overlap/carry further if needed to fit headers + next unit

@@ -109,6 +109,11 @@ type SearchResult struct {
 	ChunkType string `json:"chunk_type"`
 	// 父 Chunk ID
 	ParentChunkID string `json:"parent_chunk_id"`
+	// 子 Chunk IDs（父 chunk 的反向链接）
+	ChildChunkIDs JSON `json:"child_chunk_ids,omitempty"`
+	// ContextHeader stores the heading breadcrumb for this chunk,
+	// providing section context that improves retrieval positioning.
+	ContextHeader string `json:"context_header,omitempty"`
 	// 图片信息 (JSON 格式)
 	ImageInfo string `json:"image_info"`
 

@@ -23,6 +23,7 @@ const (
 	MatchTypeWebSearch    // 网络搜索匹配类型
 	MatchTypeDirectLoad   // 直接加载匹配类型
 	MatchTypeDataAnalysis // 数据分析匹配类型
+	MatchTypeSiblingChunk // 同级Chunk匹配类型（同一父Chunk的兄弟Chunk）
 )
 
 // IndexInfo contains information about indexed content

@@ -60,6 +60,24 @@ func (s *knowledgeBaseService) processSearchResults(ctx context.Context,
 				for _, chunk := range additionalChunks {
 					chunkMap[chunk.ID] = chunk
 				}
+
+				// Collect sibling chunk IDs from parent chunks' ChildChunkIDs.
+				// When a child chunk matches, its siblings (other children of the
+				// same parent) provide complementary context that improves source
+				// hit rate for hierarchical document structures.
+				siblingIDs := s.collectSiblingIDsFromParents(allChunks, chunkMap, index)
+				if len(siblingIDs) > 0 {
+					logger.Infof(ctx, "Fetching %d sibling chunks", len(siblingIDs))
+					siblingChunks, err := s.listChunksByIDWithShared(ctx, tenantID, siblingIDs)
+					if err != nil {
+						logger.Warnf(ctx, "Failed to fetch some sibling chunks: %v", err)
+					} else {
+						for _, chunk := range siblingChunks {
+							chunkMap[chunk.ID] = chunk
+						}
+					}
+				}
+
 				// Second round: only needed when image chunks are among primary
 				// results (image → text resolved above, now text → parent_text).
 				// For normal text-only results this is a no-op.
@@ -167,6 +185,7 @@ func (s *knowledgeBaseService) collectEnrichmentChunkIDs(
 				idx.matchTypes[chunk.PreChunkID] = types.MatchTypeNearByChunk
 			}
 		}
+
 	}
 
 	return additionalIDs
@@ -320,6 +339,8 @@ func (s *knowledgeBaseService) buildSearchResult(chunk *types.Chunk,
 		Metadata:          knowledge.GetMetadata(),
 		ChunkType:         string(chunk.ChunkType),
 		ParentChunkID:     chunk.ParentChunkID,
+		ChildChunkIDs:     chunk.ChildChunkIDs,
+		ContextHeader:     chunk.ContextHeader,
 		ImageInfo:         chunk.ImageInfo,
 		KnowledgeFilename:    knowledge.FileName,
 		KnowledgeSource:      knowledge.Source,
@@ -340,3 +361,37 @@ func (s *knowledgeBaseService) isSearchableChunk(chunk *types.Chunk) bool {
 		types.ChunkTypeImageOCR, types.ChunkTypeImageCaption,
 	}, chunk.ChunkType)
 }
+
+// collectSiblingIDsFromParents looks up parent chunks in chunkMap and extracts
+// sibling chunk IDs from their ChildChunkIDs field. Siblings of a matching child
+// chunk provide complementary context that improves source hit rate.
+func (s *knowledgeBaseService) collectSiblingIDsFromParents(
+	primaryChunks []*types.Chunk,
+	chunkMap map[string]*types.Chunk,
+	idx *chunkIndex,
+) []string {
+	var siblingIDs []string
+	for _, chunk := range primaryChunks {
+		if chunk.ParentChunkID == "" {
+			continue
+		}
+		parent, ok := chunkMap[chunk.ParentChunkID]
+		if !ok || len(parent.ChildChunkIDs) == 0 {
+			continue
+		}
+		var childIDs []string
+		if err := json.Unmarshal(parent.ChildChunkIDs, &childIDs); err != nil {
+			continue
+		}
+		for _, cid := range childIDs {
+			if !idx.processedIDs[cid] {
+				siblingIDs = append(siblingIDs, cid)
+				idx.processedIDs[cid] = true
+				idx.matchTypes[cid] = types.MatchTypeSiblingChunk
+			}
+		}
+	}
+	return siblingIDs
+}
+
+

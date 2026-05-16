@@ -164,11 +164,16 @@ type Chunk struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	// Soft delete marker, supports data recovery
 	DeletedAt gorm.DeletedAt `json:"deleted_at"               gorm:"index"`
-	// ContextHeader is an in-memory-only context string (e.g. a Markdown
-	// heading breadcrumb) that the indexing pipeline prepends to Content
-	// when generating embeddings. NOT persisted — populated by the chunker
-	// during initial splitting and discarded after indexing.
-	ContextHeader string `json:"-" gorm:"-"`
+	// ContextHeader stores the heading breadcrumb (e.g. "# Chapter 1\n## Section 1.2")
+	// that the chunker attaches during splitting. Persisted to DB so that:
+	// 1) Re-embedding can reconstruct the full embedding content without re-chunking.
+	// 2) Search results can expose section context for better retrieval positioning.
+	// 3) The context_header survives across sessions instead of being discarded after indexing.
+	ContextHeader string `json:"context_header"           gorm:"type:text"`
+	// ChildChunkIDs stores the IDs of child chunks that reference this chunk as their
+	// parent. Populated during processChunks for parent_text chunks. Enables reverse
+	// traversal from parent → children without a separate DB query.
+	ChildChunkIDs JSON `json:"child_chunk_ids"           gorm:"type:json"`
 }
 
 // EmbeddingContent returns the chunk content with ContextHeader prepended

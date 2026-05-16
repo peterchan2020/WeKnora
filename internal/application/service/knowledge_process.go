@@ -634,19 +634,30 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		insertChunks = append(insertChunks, parentDBChunks...)
 	}
 
+		// Inject document title as ContextHeader fallback for chunks that lack
+		// heading breadcrumbs (Tier-2/Tier-3 never set ContextHeader). This ensures
+		// every chunk carries at least the document title for semantic positioning,
+		// which significantly improves source hit rate for PDF-heavy knowledge bases.
+		docTitle := strings.TrimSpace(knowledge.Title)
+	// Wire up ParentChunkID for child chunks and collect child IDs on parents
+	parentChildMap := make(map[int][]string) // parentIndex → child IDs
 	for idx, chunkData := range chunks {
 		if strings.TrimSpace(chunkData.Content) == "" {
 			continue
 		}
 
-		// 创建主文本Chunk
+			// 创建主文本Chunk
+			contextHeader := chunkData.ContextHeader
+			if contextHeader == "" && docTitle != "" {
+				contextHeader = "# " + docTitle
+			}
 		textChunk := &types.Chunk{
 			ID:              uuid.New().String(),
 			TenantID:        knowledge.TenantID,
 			KnowledgeID:     knowledge.ID,
 			KnowledgeBaseID: knowledge.KnowledgeBaseID,
 			Content:         chunkData.Content,
-			ContextHeader:   chunkData.ContextHeader,
+			ContextHeader:   contextHeader,
 			ChunkIndex:      int(chunkData.Seq),
 			IsEnabled:       true,
 			CreatedAt:       time.Now(),
@@ -660,10 +671,21 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		// Wire up ParentChunkID for child chunks
 		if hasParentChild && chunkData.ParentIndex >= 0 && chunkData.ParentIndex < len(parentDBChunks) {
 			textChunk.ParentChunkID = parentDBChunks[chunkData.ParentIndex].ID
+			parentChildMap[chunkData.ParentIndex] = append(parentChildMap[chunkData.ParentIndex], textChunk.ID)
 		}
 
 		chunks[idx].ChunkID = textChunk.ID
 		insertChunks = append(insertChunks, textChunk)
+	}
+
+	// Populate ChildChunkIDs on parent chunks
+	if hasParentChild {
+		for parentIdx, childIDs := range parentChildMap {
+			if parentIdx < len(parentDBChunks) && len(childIDs) > 0 {
+				idsJSON, _ := json.Marshal(childIDs)
+				parentDBChunks[parentIdx].ChildChunkIDs = types.JSON(idsJSON)
+			}
+		}
 	}
 
 	// Sort chunks by index for proper ordering

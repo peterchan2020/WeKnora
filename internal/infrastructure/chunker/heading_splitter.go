@@ -391,7 +391,7 @@ func pureHeadingChunkHeader(chunk Chunk) (string, bool) {
 	// Accept multi-line chunks where every non-blank line is a heading.
 	// This handles PDF-extracted headings like "# 1Introduction\n\n"
 	// which have a heading line plus trailing blank lines.
-	headingLine := ""
+	var headingLines []string
 	for _, line := range strings.Split(trimmed, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -406,31 +406,31 @@ func pureHeadingChunkHeader(chunk Chunk) (string, bool) {
 			// Also accept numbered section lines without # prefix (common in
 			// PDF extraction), e.g. "7.1. Induced and spontaneous mutation".
 			if NumberedSectionPattern.MatchString(matchLine) {
-				if headingLine != "" {
-					return "", false // multiple heading lines — not a pure heading chunk
-				}
-				headingLine = matchLine
+				headingLines = append(headingLines, matchLine)
 				continue
 			}
 			return "", false // non-heading content found
 		}
-		if headingLine != "" {
-			return "", false // multiple heading lines — not a pure heading chunk
-		}
-		headingLine = matchLine
+		headingLines = append(headingLines, matchLine)
 	}
-	if headingLine == "" {
+	if len(headingLines) == 0 {
 		return "", false
 	}
 	if chunk.ContextHeader != "" {
 		return chunk.ContextHeader, true
 	}
-	m := MarkdownHeadingPattern.FindStringSubmatch(headingLine)
-	if m != nil {
-		return strings.Repeat("#", len(m[1])) + " " + strings.TrimSpace(m[2]), true
+	// Build the heading text from all heading lines.
+	var resultParts []string
+	for _, hl := range headingLines {
+		m := MarkdownHeadingPattern.FindStringSubmatch(hl)
+		if m != nil {
+			resultParts = append(resultParts, strings.Repeat("#", len(m[1]))+" "+strings.TrimSpace(m[2]))
+		} else {
+			// Numbered section without # prefix: return as-is for context.
+			resultParts = append(resultParts, hl)
+		}
 	}
-	// Numbered section without # prefix: return as-is for context.
-	return headingLine, true
+	return strings.Join(resultParts, "\n"), true
 }
 
 // isHeadingOnlySection returns true when the section contains no retrievable

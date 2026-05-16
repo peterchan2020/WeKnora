@@ -416,7 +416,7 @@ const WIKI_ONLY_CHUNKING_PRESET = {
 // falls back to its package defaults.
 const DEFAULT_CHUNKING_PRESET = {
   chunkSize: 512,
-  chunkOverlap: 80,
+  chunkOverlap: 128,
   enableParentChild: true,
 } as const
 
@@ -489,10 +489,10 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
     },
     chunkingConfig: {
       chunkSize: 512,
-      // 80 ≈ 15% of chunkSize — community-recommended sweet spot.
+      // 128 ≈ 25% of chunkSize — improved recall for cross-boundary answers.
       // Aligned with chunker.DefaultChunkOverlap on the backend.
-      chunkOverlap: 80,
-      separators: ['\n\n', '\n', '。', '！', '？', ';', '；'],
+      chunkOverlap: 128,
+      separators: ['\n\n', '\n', '. ', '! ', '? ', '。', '！', '？', '; ', '；'],
       parserEngineRules: undefined as any,
       enableParentChild: true,
       parentChunkSize: 4096,
@@ -596,8 +596,8 @@ const loadKBData = async () => {
         chunkSize: kb.chunking_config?.chunk_size || 512,
         // Fallback only used when the loaded KB has no chunk_overlap stored.
         // Aligned with chunker.DefaultChunkOverlap on the backend.
-        chunkOverlap: kb.chunking_config?.chunk_overlap || 80,
-        separators: kb.chunking_config?.separators || ['\n\n', '\n', '。', '！', '？', ';', '；'],
+        chunkOverlap: kb.chunking_config?.chunk_overlap || 128,
+        separators: kb.chunking_config?.separators || ['\n\n', '\n', '. ', '! ', '? ', '。', '！', '？', '; ', '；'],
         parserEngineRules: kb.chunking_config?.parser_engine_rules || undefined,
         enableParentChild: kb.chunking_config?.enable_parent_child || false,
         parentChunkSize: kb.chunking_config?.parent_chunk_size || 4096,

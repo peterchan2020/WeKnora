@@ -334,3 +334,30 @@ body B.`
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// pureHeadingChunkHeader tests
+// ---------------------------------------------------------------------------
+
+// TestPureHeadingChunkHeader_MultiHeading verifies that pureHeadingChunkHeader
+// accepts multi-heading chunks and returns all heading lines joined.
+func TestPureHeadingChunkHeader_MultiHeading(t *testing.T) {
+	chunk := Chunk{Content: "# Section 1\n\n## Subsection 1.1\n\n"}
+	header, ok := pureHeadingChunkHeader(chunk)
+	if !ok {
+		t.Fatalf("pureHeadingChunkHeader returned false for multi-heading chunk")
+	}
+	if !strings.Contains(header, "Section 1") || !strings.Contains(header, "Subsection 1.1") {
+		t.Errorf("header = %q, want both heading lines", header)
+	}
+}
+
+// TestPureHeadingChunkHeader_NonHeadingRejected verifies that non-heading
+// content mixed with headings still returns false.
+func TestPureHeadingChunkHeader_NonHeadingRejected(t *testing.T) {
+	chunk := Chunk{Content: "# Section 1\n\nSome body text here\n\n"}
+	_, ok := pureHeadingChunkHeader(chunk)
+	if ok {
+		t.Error("pureHeadingChunkHeader should return false for chunk with body text")
+	}
+}

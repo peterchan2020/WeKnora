@@ -1682,6 +1682,15 @@ const handleScroll = () => {
     }
   }
 };
+
+const loadMoreFiles = () => {
+  if (docListLoading.value || cardList.value.length >= total.value) return;
+  const pageNum = Math.ceil(total.value / pageSize);
+  if (page >= pageNum) return;
+  page++;
+  getKnowled({ page, page_size: pageSize, ...filterParams.value });
+};
+
 const getDoc = (page: number) => {
   getfDetails(details.id, page)
 };
@@ -1808,6 +1817,15 @@ const confirmBatchDelete = async () => {
 
 const openBatchRebuildDialog = () => {
   if (selectedIds.value.size === 0) return;
+  const hasParsing = (cardList.value || []).some(
+    (item: KnowledgeCard) =>
+      selectedIds.value.has(item.id) &&
+      (item.parse_status === 'pending' || item.parse_status === 'processing'),
+  );
+  if (hasParsing) {
+    MessagePlugin.info(t('knowledgeBase.rebuildInProgress'));
+    return;
+  }
   batchRebuildDialog.value = true;
 };
 
@@ -2593,6 +2611,24 @@ async function createNewSession(value: string): Promise<void> {
                   <EmptyKnowledge />
                 </div>
               </template>
+              <div
+                v-if="cardList.length > 0 && total > 0 && !docListLoading"
+                class="doc-pagination-info"
+              >
+                <span class="doc-pagination-text">
+                  {{ t('knowledgeBase.paginationInfo', { loaded: cardList.length, total }) }}
+                </span>
+                <t-button
+                  v-if="cardList.length < total"
+                  variant="text"
+                  theme="primary"
+                  size="small"
+                  :loading="docListLoading"
+                  @click="loadMoreFiles"
+                >
+                  {{ t('knowledgeBase.loadMore') }}
+                </t-button>
+              </div>
             </div>
             <div class="doc-batch-bar-anchor" v-show="batchMode || selectedIds.size > 0">
               <DocumentBatchBar
@@ -3765,6 +3801,21 @@ async function createNewSession(value: string): Promise<void> {
   justify-content: center;
   padding: 60px 20px;
   min-height: 100%;
+}
+
+.doc-pagination-info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 0 8px;
+  border-top: 1px solid var(--td-component-stroke);
+}
+
+.doc-pagination-text {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  font-family: var(--app-font-family);
 }
 
 

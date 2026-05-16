@@ -165,7 +165,7 @@ func buildSplitterConfig(kb *types.KnowledgeBase) chunker.SplitterConfig {
 		chunkCfg.ChunkOverlap = chunker.DefaultChunkOverlap
 	}
 	if len(chunkCfg.Separators) == 0 {
-		chunkCfg.Separators = []string{"\n\n", "\n", "。"}
+		chunkCfg.Separators = []string{"\n\n", "\n", ". ", "! ", "? ", "。", "！", "？", "; ", "；"}
 	}
 	return chunkCfg
 }
@@ -193,7 +193,7 @@ func buildParentChildConfigs(cc types.ChunkingConfig, base chunker.SplitterConfi
 	}
 	child = chunker.SplitterConfig{
 		ChunkSize:                    childSize,
-		ChunkOverlap:                 childSize / 5, // ~20% overlap for child chunks
+		ChunkOverlap:                 min(childSize/3, base.ChunkOverlap), // cap at 1/3 of childSize, inherit base
 		Separators:                   base.Separators,
 		Strategy:                     base.Strategy,
 		TokenLimit:                   base.TokenLimit,

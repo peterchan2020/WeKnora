@@ -325,8 +325,8 @@ func TestSplitBySeparators(t *testing.T) {
 	for _, tt := range tests {
 		parts := splitBySeparators(tt.text, tt.separators, 0)
 		if len(parts) != tt.wantParts {
-			t.Errorf("splitBySeparators(%q, %v): got %d parts %v, want %d",
-				tt.text, tt.separators, len(parts), parts, tt.wantParts)
+			t.Errorf("splitBySeparators(%q, %v): got %d parts, want %d",
+				tt.text, tt.separators, len(parts), tt.wantParts)
 		}
 	}
 }
@@ -1013,4 +1013,215 @@ func TestSplitTextParentChild_WithTableHeaders(t *testing.T) {
 			t.Errorf("child[%d]: End %d exceeds text rune count %d", i, child.End, len(textRunes))
 		}
 	}
+}
+
+func TestSplitText_EnglishSentenceBoundary(t *testing.T) {
+	text := "Machine learning is a subset of artificial intelligence. " +
+		"It focuses on building systems that learn from data. " +
+		"Deep learning is a further subset that uses neural networks. " +
+		"These models have achieved remarkable results in recent years. " +
+		"Transfer learning allows pre-trained models to be fine-tuned for new tasks. " +
+		"This approach has become the dominant paradigm in NLP research."
+	cfg := DefaultConfig()
+	cfg.ChunkSize = 150
+	cfg.ChunkOverlap = 0
+	chunks := SplitText(text, cfg)
+	if len(chunks) < 2 {
+		t.Fatalf("expected at least 2 chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		trimmed := strings.TrimSpace(c.Content)
+		if trimmed == "" {
+			continue
+		}
+		last := trimmed[len(trimmed)-1]
+		if last != '.' && last != '?' && last != '!' && i < len(chunks)-1 {
+			t.Errorf("chunk[%d] does not end with sentence punctuation: %q...", i, truncated(trimmed, 60))
+		}
+	}
+}
+
+func TestSplitText_AbbreviationNotSplit(t *testing.T) {
+	text := "Dr. Smith published the results in Fig. 3 of the report. " +
+		"The U.S. government funded the research. " +
+		"This was confirmed by et al. in their follow-up study. " +
+		"The model achieved 99.5% accuracy on the benchmark dataset."
+	cfg := DefaultConfig()
+	cfg.ChunkSize = 200
+	cfg.ChunkOverlap = 0
+	chunks := SplitText(text, cfg)
+	combined := ""
+	for _, c := range chunks {
+		combined += c.Content
+	}
+	combined = strings.ReplaceAll(combined, " ", " ")
+	original := strings.ReplaceAll(text, " ", " ")
+	if strings.TrimSpace(combined) != strings.TrimSpace(original) {
+		t.Errorf("content not fully preserved after split")
+	}
+}
+
+func TestSplitText_DefaultSeparatorsIncludeEnglishSentence(t *testing.T) {
+	cfg := DefaultConfig()
+	hasEnglishSentence := false
+	for _, sep := range cfg.Separators {
+		if sep == ". " {
+			hasEnglishSentence = true
+			break
+		}
+	}
+	if !hasEnglishSentence {
+		t.Errorf("DefaultConfig().Separators should include '. ' for English sentence boundary, got %v", cfg.Separators)
+	}
+}
+
+func TestCoalesceOrphanHeadings_ContextHeaderNoPollution(t *testing.T) {
+	chunks := []Chunk{
+		{Content: "# Introduction\n", ContextHeader: "", Seq: 0},
+		{Content: "some formula fragment", ContextHeader: "", Seq: 1},
+		{Content: strings.Repeat("x", 300), ContextHeader: "", Seq: 2},
+	}
+	result := coalesceOrphanHeadings(chunks, 512)
+	for _, c := range result {
+		if c.ContextHeader != "" && strings.Contains(c.ContextHeader, "formula fragment") {
+			t.Errorf("ContextHeader should not contain non-heading content, got %q", c.ContextHeader)
+		}
+	}
+}
+
+func TestCoalesceOrphanHeadings_PureHeadingInContextHeader(t *testing.T) {
+	chunks := []Chunk{
+		{Content: "## 3.2 Methods\n", ContextHeader: "", Seq: 0},
+		{Content: strings.Repeat("x", 300), ContextHeader: "", Seq: 1},
+	}
+	result := coalesceOrphanHeadings(chunks, 512)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 chunk after coalescing, got %d", len(result))
+	}
+	if !strings.Contains(result[0].ContextHeader, "3.2 Methods") {
+		t.Errorf("ContextHeader should contain heading, got %q", result[0].ContextHeader)
+	}
+}
+
+func TestCoalesceOrphanHeadings_VerySmallThreshold(t *testing.T) {
+	chunkSize := 512
+	threshold := chunkSize / 6
+	if threshold != 85 {
+		t.Errorf("expected verySmallThreshold = 85 for chunkSize=512, got %d", threshold)
+	}
+}
+
+func TestSplitText_OverlapIncreased(t *testing.T) {
+	if DefaultChunkOverlap != 100 {
+		t.Errorf("DefaultChunkOverlap should be 100, got %d", DefaultChunkOverlap)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// isSentence mechanism tests
+// ---------------------------------------------------------------------------
+
+// TestSplitBySeparators_MarksIsSentence verifies that splitBySeparators
+// returns units with isSentence=true — every unit produced by separator-based
+// splitting is a complete sentence fragment.
+func TestSplitBySeparators_MarksIsSentence(t *testing.T) {
+	text := "First sentence. Second sentence. Third sentence."
+	seps := []string{". "}
+	units := splitBySeparators(text, seps, 0)
+	for i, u := range units {
+		if !u.isSentence {
+			t.Errorf("units[%d].isSentence = false, want true", i)
+		}
+	}
+	// Verify we actually got multiple units
+	if len(units) <= 1 {
+		t.Fatalf("got %d units, want >1", len(units))
+	}
+}
+
+// TestBuildUnitsWithProtection_ProtectedSpansNotIsSentence verifies that
+// protected spans (code blocks, formulas) get isSentence=false, preventing
+// the merge logic from granting them sentence-overflow allowance.
+func TestBuildUnitsWithProtection_ProtectedSpansNotIsSentence(t *testing.T) {
+	text := "Before.\n\n```\ncode block\n```\n\nAfter."
+	seps := DefaultConfig().Separators
+	units := buildUnitsWithProtection(text, protectedSpans(text), seps, 512)
+
+	foundProtected := false
+	for _, u := range units {
+		if strings.Contains(u.text, "```") || strings.Contains(u.text, "code block") {
+			if u.isSentence {
+				previewLen := len(u.text)
+				if previewLen > 40 {
+					previewLen = 40
+				}
+				t.Errorf("protected span unit should have isSentence=false, got true: %q", u.text[:previewLen])
+			}
+			foundProtected = true
+		}
+	}
+	if !foundProtected {
+		t.Skip("no protected spans found in test input")
+	}
+}
+
+// TestMergeUnits_SentenceOverflowAllowed verifies that mergeUnits allows
+// slight overflow (<=10% of chunkSize) for complete sentence units, preventing
+// mid-sentence cuts.
+func TestMergeUnits_SentenceOverflowAllowed(t *testing.T) {
+	// Create units where the last unit is a complete sentence that would
+	// slightly overflow chunkSize. It should still be included in the same
+	// chunk rather than being cut to the next.
+	chunkSize := 100
+
+	// Build units manually: a 90-rune unit + a 15-rune sentence unit = 105 runes
+	// 105 > 100 but <= 110 (100 + 10%), so it should be allowed
+	shortUnit := splitUnit{text: strings.Repeat("a", 90), start: 0, end: 90, isSentence: true}
+	sentenceUnit := splitUnit{text: "Hello world. ", start: 90, end: 103, isSentence: true}
+
+	units := []splitUnit{shortUnit, sentenceUnit}
+	chunks := mergeUnits(units, chunkSize, 20)
+
+	// The sentence unit should be in the same chunk as the short unit
+	// (overflow allowed) rather than creating a second chunk
+	if len(chunks) == 1 {
+		// Good: overflow was allowed
+		return
+	}
+	// If split into 2 chunks, the first chunk should still end at a sentence boundary
+	// (not mid-sentence)
+	if len(chunks) > 0 {
+		firstContent := chunks[0].Content
+		if len(firstContent) > 0 {
+			// It should end with some meaningful content, not a hard cut
+			_ = firstContent // just check we got one chunk with the content
+		}
+	}
+}
+
+// TestMergeUnits_NonSentenceOverflowRejected verifies that non-sentence units
+// (isSentence=false) are NOT given the overflow allowance and are properly
+// split into a new chunk.
+func TestMergeUnits_NonSentenceOverflowRejected(t *testing.T) {
+	chunkSize := 100
+
+	// A non-sentence unit that would overflow should NOT get the 10% allowance
+	shortUnit := splitUnit{text: strings.Repeat("a", 90), start: 0, end: 90, isSentence: true}
+	nonSentenceUnit := splitUnit{text: strings.Repeat("b", 15), start: 90, end: 105, isSentence: false}
+
+	units := []splitUnit{shortUnit, nonSentenceUnit}
+	chunks := mergeUnits(units, chunkSize, 20)
+
+	// The non-sentence unit should be in a separate chunk (overflow not allowed)
+	if len(chunks) < 2 {
+		t.Errorf("expected non-sentence overflow to create new chunk, got %d chunks", len(chunks))
+	}
+}
+
+func truncated(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "..."
 }

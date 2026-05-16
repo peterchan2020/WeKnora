@@ -134,3 +134,30 @@ func TestShouldIndexTextChunkFiltersOnlyWeakTinyChunks(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildParentChildConfigs_ChildOverlap(t *testing.T) {
+	tests := []struct {
+		name              string
+		childSize         int
+		baseOverlap       int
+		wantChildOverlap  int
+	}{
+		{name: "default: childSize=384, baseOverlap=128", childSize: 384, baseOverlap: 128, wantChildOverlap: 128},
+		{name: "small base overlap: childSize=384, baseOverlap=30", childSize: 384, baseOverlap: 30, wantChildOverlap: 30},
+		{name: "large base overlap capped by childSize/3: childSize=200, baseOverlap=128", childSize: 200, baseOverlap: 128, wantChildOverlap: 66},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cc := types.ChunkingConfig{
+				ChildChunkSize: tt.childSize,
+				ChunkOverlap:   tt.baseOverlap,
+			}
+			base := chunker.SplitterConfig{ChunkOverlap: tt.baseOverlap}
+			_, child := buildParentChildConfigs(cc, base)
+			if child.ChunkOverlap != tt.wantChildOverlap {
+				t.Errorf("child.ChunkOverlap = %d, want %d", child.ChunkOverlap, tt.wantChildOverlap)
+			}
+		})
+	}
+}

@@ -280,6 +280,8 @@ export default {
     batchRebuildLoading: "正在批量重建知识，请稍候...",
     batchRebuildSuccess: "批量重建知识完成，成功 {success} 个，失败 {fail} 个",
     batchRebuildFailed: "批量重建知识失败，请检查网络连接后重试",
+    paginationInfo: "已加载 {loaded} / {total} 个文档",
+    loadMore: "加载更多",
     statusCompleted: "已完成",
     statusProcessing: "解析中",
     statusPending: "等待中",

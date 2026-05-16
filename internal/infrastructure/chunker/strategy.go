@@ -313,7 +313,7 @@ func ensureDefaults(cfg SplitterConfig) SplitterConfig {
 		cfg.ChunkOverlap = DefaultChunkOverlap
 	}
 	if len(cfg.Separators) == 0 {
-		cfg.Separators = []string{"\n\n", "\n", "。"}
+		cfg.Separators = []string{"\n\n", "\n", ". ", "! ", "? ", "。", "！", "？", "; ", "；"}
 	}
 	if cfg.TokenLimit > 0 {
 		lang := LangMixed

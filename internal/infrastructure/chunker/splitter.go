@@ -549,6 +549,13 @@ func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 		}
 	}
 
+	// If remaining text after maxEnd is <30% of chunkSize, extend to end
+	// rather than creating a tiny trailing fragment with a mid-sentence cut.
+	remaining := len(runes) - maxEnd
+	if remaining > 0 && remaining <= chunkSize*3/10 {
+		return len(runes)
+	}
+
 	// Hard cut (last resort).
 	return maxEnd
 }

@@ -165,9 +165,9 @@ func ProfileDocument(text string) *DocProfile {
 		if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
 			p.HasTables = true
 		}
-		// LaTeX math detection: block $$, egin{}, \end{}
+		// LaTeX math detection: block $$, \begin{, \end{}
 		// Do NOT count bare brackets (Markdown links) or year numbers
-		if strings.Contains(line, "$$") || strings.Contains(line, "egin{") || strings.Contains(line, "\end{") {
+		if strings.Contains(line, `$$`) || strings.Contains(line, `\begin{`) || strings.Contains(line, `\end{`) {
 			p.FormulaCount++
 		}
 		if abstractPattern.MatchString(line) {

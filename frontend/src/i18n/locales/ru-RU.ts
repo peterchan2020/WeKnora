@@ -4091,6 +4091,7 @@ export default {
     connected: 'Подключено',
     connectionFailed: 'Подключение не удалось',
     isRequired: 'обязательно для заполнения',
+    credentialsLabel: 'учётные данные',
     resourceHint: 'Выберите пространства или папки для синхронизации',
     untitled: 'Без названия',
     resourceLoadFailed: 'Не удалось загрузить список ресурсов',
@@ -4254,5 +4255,20 @@ export default {
       botIdentity: 'Идентификатор бота',
       createdAt: 'Создано',
     },
+  },
+  credential: {
+    configured: 'Настроено',
+    unconfigured: 'Не настроено',
+    configure: 'Настроить',
+    update: 'Заменить',
+    remove: 'Удалить',
+    inputPlaceholder: 'Введите значение',
+    savedToast: 'Учётные данные сохранены',
+    saveFailed: 'Не удалось сохранить учётные данные',
+    removedToast: 'Учётные данные удалены',
+    removeFailed: 'Не удалось удалить учётные данные',
+    confirmRemoveTitle: 'Удалить {field}?',
+    confirmRemoveBody:
+      'Сохранённые учётные данные будут безвозвратно удалены. Интеграции, использующие их, перестанут работать до настройки нового значения.',
   },
 }

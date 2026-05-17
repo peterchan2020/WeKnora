@@ -4133,6 +4133,7 @@ export default {
     connected: 'Connected',
     connectionFailed: 'Connection failed',
     isRequired: 'is required',
+    credentialsLabel: 'credentials',
     resourceHint: 'Select the spaces or folders to sync',
     untitled: 'Untitled',
     resourceLoadFailed: 'Failed to load resources',
@@ -4297,5 +4298,23 @@ export default {
       botIdentity: 'Bot identity',
       createdAt: 'Created at',
     },
+  },
+  // Shared credential resource UI (CredentialResource.vue). Keep keys
+  // generic so the same component can drive MCP / Model / WebSearch /
+  // DataSource credential surfaces without per-resource overrides.
+  credential: {
+    configured: 'Configured',
+    unconfigured: 'Not configured',
+    configure: 'Configure',
+    update: 'Replace',
+    remove: 'Remove',
+    inputPlaceholder: 'Enter value',
+    savedToast: 'Credential saved',
+    saveFailed: 'Failed to save credential',
+    removedToast: 'Credential removed',
+    removeFailed: 'Failed to remove credential',
+    confirmRemoveTitle: 'Remove {field}?',
+    confirmRemoveBody:
+      'This permanently deletes the stored credential. Integrations using it will stop working until you configure a new value.',
   },
 }

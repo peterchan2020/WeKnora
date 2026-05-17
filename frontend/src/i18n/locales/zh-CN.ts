@@ -4129,6 +4129,7 @@ export default {
     connected: "已连接",
     connectionFailed: "连接失败",
     isRequired: "为必填项",
+    credentialsLabel: "凭证",
     resourceHint: "选择要同步的内容空间/文件夹",
     untitled: "无标题",
     resourceLoadFailed: "加载资源列表失败",
@@ -4293,5 +4294,20 @@ export default {
       botIdentity: "Bot 标识",
       createdAt: "创建时间",
     },
+  },
+  credential: {
+    configured: "已配置",
+    unconfigured: "未配置",
+    configure: "配置",
+    update: "更换",
+    remove: "移除",
+    inputPlaceholder: "请输入",
+    savedToast: "凭据已保存",
+    saveFailed: "保存凭据失败",
+    removedToast: "凭据已移除",
+    removeFailed: "移除凭据失败",
+    confirmRemoveTitle: "移除 {field}？",
+    confirmRemoveBody:
+      "此操作将永久删除已保存的凭据，依赖它的集成将停止工作，直到您重新配置。",
   },
 };

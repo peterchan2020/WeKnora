@@ -639,18 +639,18 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		// every chunk carries at least the document title for semantic positioning,
 		// which significantly improves source hit rate for PDF-heavy knowledge bases.
 		docTitle := strings.TrimSpace(knowledge.Title)
-	// Wire up ParentChunkID for child chunks and collect child IDs on parents
-	parentChildMap := make(map[int][]string) // parentIndex → child IDs
-	for idx, chunkData := range chunks {
+		// Wire up ParentChunkID for child chunks and collect child IDs on parents
+		parentChildMap := make(map[int][]string) // parentIndex → child IDs
+		for idx, chunkData := range chunks {
 		if strings.TrimSpace(chunkData.Content) == "" {
 			continue
 		}
 
-			// 创建主文本Chunk
-			contextHeader := chunkData.ContextHeader
-			if contextHeader == "" && docTitle != "" {
-				contextHeader = "# " + docTitle
-			}
+		// 创建主文本Chunk
+		contextHeader := chunkData.ContextHeader
+		if contextHeader == "" && docTitle != "" {
+			contextHeader = "# " + docTitle
+		}
 		textChunk := &types.Chunk{
 			ID:              uuid.New().String(),
 			TenantID:        knowledge.TenantID,

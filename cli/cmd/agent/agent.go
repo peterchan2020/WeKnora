@@ -1,7 +1,7 @@
 // Package agentcmd holds the `weknora agent` command tree:
 // list / view / invoke / create / edit / delete. The directory is named
-// `agent/` (matches cobra noun-verb convention) but the Go package is
-// `agentcmd` to avoid colliding with cobra's *cobra.Command identifier.
+// `agent/` to match the cobra subcommand; the Go package is `agentcmd`
+// to avoid colliding with cobra's *cobra.Command identifier.
 //
 // "agent" in this subtree refers to WeKnora's user-defined Custom
 // Agents (server resource: GET/POST /agents/...). The CLI's
@@ -34,5 +34,7 @@ or delete agents.`,
 	cmd.AddCommand(NewCmdCreate(f))
 	cmd.AddCommand(NewCmdEdit(f))
 	cmd.AddCommand(NewCmdDelete(f))
+	cmd.AddCommand(NewCmdStatus(f))
+	cmd.AddCommand(NewCmdCheck(f))
 	return cmd
 }

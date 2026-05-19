@@ -11,7 +11,7 @@ import (
 	"github.com/neurosnap/sentences/english"
 )
 
-//go:embed chinese_punkt.json
+//go:embed data/chinese_punkt.json
 var chinesePunktJSON []byte
 
 // chineseRawData mirrors the JSON layout produced by the punkt training

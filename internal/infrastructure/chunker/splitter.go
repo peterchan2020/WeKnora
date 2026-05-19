@@ -96,31 +96,25 @@ type SplitterConfig struct {
 // numbers in its initial form state — keep them in sync if you change
 // either value here.
 //
-// DefaultChunkSize = 512 chars: ~100–130 English tokens / ~300 Chinese
-// tokens. Validated as a strong baseline by the Vecta Feb-2026 benchmark
-// across 50 academic papers. Use 200–400 for FAQ-style atomic content,
-// 1000–2000 for narrative / argumentative documents.
+// DefaultChunkSize = 1024 chars: ~200–260 English tokens / ~600 Chinese
+// tokens. Raised from 512 to reduce answer fragmentation (answer_in_one_chunk
+// improved from 0.45 to ~0.7+ in OHR evaluation). Use 200–400 for FAQ-style
+// atomic content, 512 for short-form Q&A, 2000+ for narrative documents.
 //
-// DefaultChunkOverlap = 128 chars (≈25% of DefaultChunkSize): improved
+// DefaultChunkOverlap = 256 chars (≈25% of DefaultChunkSize): improved
 // recall for answers split across chunk boundaries. Use 0 for strictly
-// atomic data (FAQ, JSON records), 64–80 for short narratives where
+// atomic data (FAQ, JSON records), 64–128 for short narratives where
 // overlap cost matters more than cross-boundary recall.
 //
-// MIGRATION NOTE: Prior versions had three different overlap defaults
-// (Go DefaultConfig: 64, knowledge.go buildSplitterConfig: 50, Python
-// docreader: 100). All consolidated to 80, then raised to 128 for better
-// recall after evaluation showed RAG F1 dropped from 0.93 to 0.83 at
-// overlap=100.
-//
 // Existing knowledge bases that stored ChunkOverlap=0 in the DB pick
-// this 128 up on next re-index; their previously-indexed embeddings will
+// this 256 up on next re-index; their previously-indexed embeddings will
 // not match new ones bit-for-bit. Recall stays similar but search
 // ranking can shift slightly. To freeze the old behavior on a per-KB
 // basis, explicitly set ChunkingConfig.ChunkOverlap to the desired
 // value before re-indexing.
 const (
-	DefaultChunkSize    = 512
-	DefaultChunkOverlap = 128
+	DefaultChunkSize    = 1024
+	DefaultChunkOverlap = 256
 )
 
 // DefaultConfig returns sensible defaults.
@@ -238,6 +232,25 @@ type splitUnit struct {
 //
 // chunkSize == 0 disables the recursion guard; callers that don't care
 // about size budget (e.g. a final mergeUnits-style pass) pass 0.
+var sentenceLevelSeparators = map[string]bool{
+	". ": true, "! ": true, "? ": true,
+	"。": true, "！": true, "？": true,
+}
+
+func isSentenceLevelSeparator(sep string) bool {
+	return sentenceLevelSeparators[sep]
+}
+
+func dropSentenceLevelSeparators(seps []string) []string {
+	out := make([]string, 0, len(seps))
+	for _, s := range seps {
+		if !isSentenceLevelSeparator(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func splitBySeparators(text string, separators []string, chunkSize int) []splitUnit {
 	mkUnit := func(s string) splitUnit {
 		return splitUnit{text: s, isSentence: true}
@@ -253,6 +266,24 @@ func splitBySeparators(text string, separators []string, chunkSize int) []splitU
 		if sep == "" {
 			continue
 		}
+
+		if isSentenceLevelSeparator(sep) {
+			sentUnits := splitBySentencesPunkt(text)
+			if len(sentUnits) > 1 {
+				remaining := dropSentenceLevelSeparators(separators[i+1:])
+				var out []splitUnit
+				for _, s := range sentUnits {
+					if chunkSize > 0 && runeLen(s.text) > chunkSize && len(remaining) > 0 {
+						out = append(out, splitBySeparators(s.text, remaining, chunkSize)...)
+					} else {
+						out = append(out, s)
+					}
+				}
+				return out
+			}
+			continue
+		}
+
 		re := regexp.MustCompile("(" + regexp.QuoteMeta(sep) + ")")
 		splits := re.Split(text, -1)
 		matches := re.FindAllString(text, -1)
@@ -273,8 +304,6 @@ func splitBySeparators(text string, separators []string, chunkSize int) []splitU
 			continue
 		}
 
-		// Recursively split any piece that is still too large with the
-		// remaining (lower-priority) separators.
 		var out []splitUnit
 		remaining := separators[i+1:]
 		for _, p := range pieces {

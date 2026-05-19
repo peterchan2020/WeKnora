@@ -1112,8 +1112,8 @@ func TestCoalesceOrphanHeadings_VerySmallThreshold(t *testing.T) {
 }
 
 func TestSplitText_OverlapIncreased(t *testing.T) {
-	if DefaultChunkOverlap != 100 {
-		t.Errorf("DefaultChunkOverlap should be 100, got %d", DefaultChunkOverlap)
+	if DefaultChunkOverlap != 256 {
+		t.Errorf("DefaultChunkOverlap should be 256, got %d", DefaultChunkOverlap)
 	}
 }
 

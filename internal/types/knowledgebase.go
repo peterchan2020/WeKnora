@@ -166,7 +166,7 @@ type ChunkingConfig struct {
 	// ParentChunkSize is the size of parent chunks (default: 4096).
 	// Only used when EnableParentChild is true.
 	ParentChunkSize int `yaml:"parent_chunk_size,omitempty" json:"parent_chunk_size,omitempty"`
-	// ChildChunkSize is the size of child chunks used for embedding (default: 384).
+	// ChildChunkSize is the size of child chunks used for embedding (default: 768).
 	// Only used when EnableParentChild is true.
 	ChildChunkSize int `yaml:"child_chunk_size,omitempty" json:"child_chunk_size,omitempty"`
 	// Strategy selects the adaptive chunking tier. Empty / "legacy" preserves

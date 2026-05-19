@@ -179,7 +179,7 @@ func buildParentChildConfigs(cc types.ChunkingConfig, base chunker.SplitterConfi
 	}
 	childSize := cc.ChildChunkSize
 	if childSize <= 0 {
-		childSize = 384
+		childSize = 768
 	}
 	parent = chunker.SplitterConfig{
 		ChunkSize:                    parentSize,

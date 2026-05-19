@@ -2723,7 +2723,7 @@ export default {
       parentChunkSizeLabel: "부모 청크 크기",
       parentChunkSizeDescription: "LLM에 반환되는 컨텍스트 청크 크기 (512-8192). 기본값 4096 ≈ 1000 영어 토큰, 모든 현대 LLM 컨텍스트에 적합.",
       childChunkSizeLabel: "자식 청크 크기",
-      childChunkSizeDescription: "벡터 매칭에 사용되는 임베딩 청크 크기 (64-2048). 기본값 384 ≈ 80 토큰 — sentence-transformer / BGE 임베더의 최적점.",
+      childChunkSizeDescription: "벡터 매칭에 사용되는 임베딩 청크 크기 (64-2048). 기본값 768 ≈ 160 토큰 — sentence-transformer / BGE 임베더의 최적점.",
       strategyLabel: "청킹 전략",
       strategyDescription: "문서를 청크로 분할하는 방법을 선택합니다. 자동 모드는 문서를 프로파일링하여 최적의 전략을 선택합니다.",
       strategyPlaceholder: "청킹 전략 선택 (비워 두면 길이로 분할)",

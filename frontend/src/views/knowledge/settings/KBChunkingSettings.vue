@@ -152,7 +152,7 @@
               :min="64"
               :max="2048"
               :step="32"
-              :marks="{ 64: '64', 384: '384', 1024: '1024', 2048: '2048' }"
+              :marks="{ 64: '64', 768: '768', 1024: '1024', 2048: '2048' }"
               @change="handleChildChunkSizeChange"
               style="width: 200px;"
             />
@@ -267,7 +267,7 @@ interface ParserEngineRule {
 //   ChunkOverlap:   0–500     (default 80). Backend caps to ChunkSize/2
 //                   when set higher than that.
 //   ParentChunkSize: 512–8192 (default 4096 ≈ 1000 EN tokens).
-//   ChildChunkSize:  64–2048  (default 384 ≈ 80 EN tokens, sweet spot for
+//   ChildChunkSize:  64–2048  (default 768 ≈ 160 EN tokens, sweet spot for
 //                   sentence-transformer / BGE embedders).
 //   TokenLimit:      0–8192   (default 0 = off, char-based budget only).
 //                   Set to 200 for MiniLM (256-tok limit), 400 for BGE/
@@ -308,7 +308,7 @@ const localChunkOverlap = ref(props.config.chunkOverlap)
 const localSeparators = ref([...props.config.separators])
 const localEnableParentChild = ref(props.config.enableParentChild ?? false)
 const localParentChunkSize = ref(props.config.parentChunkSize || 4096)
-const localChildChunkSize = ref(props.config.childChunkSize || 384)
+const localChildChunkSize = ref(props.config.childChunkSize || 768)
 function normalizeStrategy(strategy?: string) {
   return strategy === 'semantic' ? 'heuristic' : (strategy ?? '')
 }
@@ -396,7 +396,7 @@ watch(() => props.config, (newConfig) => {
   localSeparators.value = [...newConfig.separators]
   localEnableParentChild.value = newConfig.enableParentChild ?? false
   localParentChunkSize.value = newConfig.parentChunkSize || 4096
-  localChildChunkSize.value = newConfig.childChunkSize || 384
+  localChildChunkSize.value = newConfig.childChunkSize || 768
   localStrategy.value = normalizeStrategy(newConfig.strategy)
   localTokenLimit.value = newConfig.tokenLimit ?? 0
   localLanguages.value = [...(newConfig.languages ?? [])]

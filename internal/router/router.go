@@ -201,21 +201,22 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterDataSourceRoutes(v1, params.DataSourceHandler, params.DataSourceCredentialsHandler, rbacGuards)
 		RegisterWeKnoraCloudRoutes(v1, params.WeKnoraCloudHandler, rbacGuards)
 		RegisterWikiPageRoutes(v1, params.WikiPageHandler, rbacGuards)
-		RegisterChunkerDebugRoutes(v1, rbacGuards)
+		RegisterChunkerDebugRoutes(v1, rbacGuards, params.ModelService)
 	}
 
 	return r
 }
 
 // RegisterChunkerDebugRoutes wires the read-only chunker preview endpoint
-// used by the KB editor's debug panel. Stateless — uses no service deps.
+// used by the KB editor's debug panel. Resolves the embedding model for
+// semantic previews via modelService.
 //
 // Viewer+ floor: the endpoint surfaces inside the tenant UI, so any
 // authenticated tenant member can call it; revoked accounts whose JWT
 // has not yet expired are kept out by the role check, matching the
 // rest of the RBAC matrix in this file.
-func RegisterChunkerDebugRoutes(r *gin.RouterGroup, g *rbacGuards) {
-	r.POST("/chunker/preview", g.Viewer(), handler.PreviewChunking)
+func RegisterChunkerDebugRoutes(r *gin.RouterGroup, g *rbacGuards, modelService interfaces.ModelService) {
+	r.POST("/chunker/preview", g.Viewer(), handler.PreviewChunkingWithModelService(modelService))
 }
 
 // RegisterChunkRoutes 注册分块相关的路由

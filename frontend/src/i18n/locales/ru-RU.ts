@@ -1691,12 +1691,12 @@ export default {
         remote: 'например: gpt-4, claude-3-opus',
         localVllm: 'например: llava:latest',
         remoteVllm: 'например: gpt-4-vision-preview',
-        remoteAsr: 'например: whisper-1'
+        remoteAsr: 'например: whisper-1, qwen3-asr-flash'
       },
       baseUrlLabel: 'Base URL',
       baseUrlPlaceholder: 'например: https://api.openai.com/v1',
       baseUrlPlaceholderVllm: 'например: http://localhost:11434/v1',
-      baseUrlPlaceholderAsr: 'например: https://api.openai.com/v1',
+      baseUrlPlaceholderAsr: 'например: https://api.openai.com/v1 или https://dashscope.aliyuncs.com/compatible-mode/v1',
       apiKeyOptional: 'API Key (опционально)',
       apiKeyPlaceholder: 'Введите API Key',
       customHeadersLabel: 'Пользовательские заголовки запроса (опционально)',

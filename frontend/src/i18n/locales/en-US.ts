@@ -2646,7 +2646,7 @@ export default {
         remote: 'e.g. gpt-4, claude-3-opus',
         localVllm: 'e.g. llava:latest',
         remoteVllm: 'e.g. gpt-4-vision-preview',
-        remoteAsr: 'e.g. whisper-1'
+        remoteAsr: 'e.g. whisper-1, qwen3-asr-flash'
       },
       baseUrlLabel: 'Base URL',
       baseUrlPlaceholder: 'e.g. https://api.openai.com/v1',

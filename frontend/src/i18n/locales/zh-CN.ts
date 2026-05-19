@@ -1873,12 +1873,12 @@ export default {
         remote: "例如：gpt-4, claude-3-opus",
         localVllm: "例如：llava:latest",
         remoteVllm: "例如：gpt-4-vision-preview",
-        remoteAsr: "例如：whisper-1",
+        remoteAsr: "例如：whisper-1、qwen3-asr-flash",
       },
       baseUrlLabel: "Base URL",
       baseUrlPlaceholder: "例如：https://api.openai.com/v1",
       baseUrlPlaceholderVllm: "例如：http://localhost:11434/v1",
-      baseUrlPlaceholderAsr: "例如：https://api.openai.com/v1",
+      baseUrlPlaceholderAsr: "例如：https://api.openai.com/v1 或 https://dashscope.aliyuncs.com/compatible-mode/v1",
       apiKeyOptional: "API Key（可选）",
       apiKeyPlaceholder: "输入 API Key",
       customHeadersLabel: "自定义请求头（可选）",
@@ -1942,7 +1942,7 @@ export default {
         },
         aliyun: {
           label: "阿里云 DashScope",
-          description: "qwen-plus, tongyi-embedding-vision-plus, qwen3-rerank, etc.",
+          description: "qwen-plus、tongyi-embedding-vision-plus、qwen3-rerank、qwen3-asr-flash 等",
         },
         zhipu: {
           label: "智谱 BigModel",

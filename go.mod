@@ -36,6 +36,7 @@ require (
 	github.com/milvus-io/milvus/client/v2 v2.6.4
 	github.com/minio/minio-go/v7 v7.1.0
 	github.com/neo4j/neo4j-go-driver/v6 v6.0.0
+	github.com/neurosnap/sentences v1.1.2
 	github.com/ollama/ollama v0.23.2
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
 	github.com/panjf2000/ants/v2 v2.12.0
@@ -280,17 +281,10 @@ require (
 	github.com/tkrajina/go-reflector v0.5.8 // indirect
 	github.com/tmc/grpc-websocket-proxy v0.0.0-20201229170055-e5319fda7802 // indirect
 	github.com/tree-sitter/go-tree-sitter v0.25.0
-	github.com/tree-sitter/tree-sitter-c v0.23.4 // indirect
-	github.com/tree-sitter/tree-sitter-embedded-template v0.23.2 // indirect
 	github.com/tree-sitter/tree-sitter-go v0.25.0
-	github.com/tree-sitter/tree-sitter-html v0.23.2 // indirect
 	github.com/tree-sitter/tree-sitter-java v0.23.5
 	github.com/tree-sitter/tree-sitter-javascript v0.25.0
-	github.com/tree-sitter/tree-sitter-json v0.24.8 // indirect
-	github.com/tree-sitter/tree-sitter-php v0.23.11 // indirect
 	github.com/tree-sitter/tree-sitter-python v0.25.0
-	github.com/tree-sitter/tree-sitter-ruby v0.23.1 // indirect
-	github.com/tree-sitter/tree-sitter-rust v0.23.2 // indirect
 	github.com/tree-sitter/tree-sitter-typescript v0.23.2
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/twpayne/go-geom v1.6.1 // indirect

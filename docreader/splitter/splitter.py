@@ -20,11 +20,11 @@ from docreader.splitter.header_hook import (
 from docreader.utils.split import split_by_char, split_by_sep
 
 # Default configuration for text chunking
-# Aligned with internal/infrastructure/chunker/splitter.go (DefaultChunkOverlap = 80,
-# DefaultChunkSize = 512). The Go splitter is now the production path; this
+# Aligned with internal/infrastructure/chunker/splitter.go (DefaultChunkOverlap = 256,
+# DefaultChunkSize = 1024). The Go splitter is now the production path; this
 # Python splitter is kept for the docreader sidecar where it's still used.
-DEFAULT_CHUNK_OVERLAP = 80  # Number of characters to overlap between chunks (~15% of chunk size)
-DEFAULT_CHUNK_SIZE = 512  # Maximum size of each chunk in characters
+DEFAULT_CHUNK_OVERLAP = 256  # Number of characters to overlap between chunks (~25% of chunk size)
+DEFAULT_CHUNK_SIZE = 1024  # Maximum size of each chunk in characters
 
 T = TypeVar("T")
 

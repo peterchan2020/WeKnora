@@ -264,7 +264,7 @@ func TestPreviewChunking_SemanticAliasFallsBackWithoutEmbeddingModel(t *testing.
 		ChunkingConfig: PreviewChunkingPayload{
 			ChunkSize:    100,
 			ChunkOverlap: 0,
-			Strategy:     chunker.StrategySemantic,
+			Strategy:     chunker.StrategyStructureAware,
 		},
 	}
 	w, parsed := postPreview(t, body)
@@ -272,7 +272,7 @@ func TestPreviewChunking_SemanticAliasFallsBackWithoutEmbeddingModel(t *testing.
 		t.Fatalf("status: got %d want 200; body=%s", w.Code, w.Body.String())
 	}
 	data := parsed["data"].(map[string]any)
-	if data["selected_tier"] == chunker.StrategySemantic {
+	if data["selected_tier"] == "semantic" {
 		t.Fatalf("semantic should no longer be a standalone preview tier: %v", data["selected_tier"])
 	}
 }

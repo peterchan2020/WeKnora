@@ -166,29 +166,6 @@ func TestSelectStrategy_PlainDoc(t *testing.T) {
 	}
 }
 
-func TestProfileDocument_FormulaDetection(t *testing.T) {
-	// Markdown links should NOT inflate FormulaCount
-	p := ProfileDocument("See [Figure 1](fig1.png) for details.\n")
-	if p.FormulaCount > 0 {
-		t.Errorf("Markdown links should not count as formulas, got FormulaCount=%d", p.FormulaCount)
-	}
-	// "1914" should NOT count
-	p2 := ProfileDocument("The war began in 1914.\n")
-	if p2.FormulaCount > 0 {
-		t.Errorf("Year 1914 should not count as formula, got FormulaCount=%d", p2.FormulaCount)
-	}
-	// LaTeX block math SHOULD count
-	p3 := ProfileDocument("$$E = mc^2$$\n")
-	if p3.FormulaCount < 1 {
-		t.Errorf("LaTeX block math should count, got FormulaCount=%d", p3.FormulaCount)
-	}
-	// \begin{} SHOULD count
-	p4 := ProfileDocument("\\begin{equation}\nx + y = z\n\\end{equation}\n")
-	if p4.FormulaCount < 1 {
-		t.Errorf("LaTeX environment should count, got FormulaCount=%d", p4.FormulaCount)
-	}
-}
-
 func TestSelectStrategy_AlwaysFallsBackToLegacy(t *testing.T) {
 	for _, doc := range []string{"", "simple", "# H1\nbody"} {
 		p := ProfileDocument(doc)

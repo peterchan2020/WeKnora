@@ -77,6 +77,10 @@ func SplitSemantic(ctx context.Context, text string, cfg SplitterConfig, embedde
 	}
 
 	cfg = ensureDefaults(cfg)
+	totalRunes := len([]rune(text))
+	if totalRunes < 500 || (cfg.ChunkSize > 0 && totalRunes <= cfg.ChunkSize*2) {
+		return SplitText(text, cfg), nil
+	}
 	sentences := semanticSentences(text)
 	if len(sentences) < 2 {
 		return SplitText(text, cfg), nil
@@ -147,7 +151,7 @@ func batchSemanticEmbeddings(ctx context.Context, embedder SemanticEmbedder, tex
 
 func semanticSentences(text string) []sentenceSpan {
 	runes := []rune(text)
-	protected := protectedSpansRune(text, protectedSpans(text))
+	protected := protectedSpansRuneFor(text)
 	var out []sentenceSpan
 	pos := 0
 	for _, p := range protected {
@@ -168,8 +172,12 @@ func semanticSentences(text string) []sentenceSpan {
 func splitPlainSentences(runes []rune, base int) []sentenceSpan {
 	var out []sentenceSpan
 	insidePaired := insidePairedPunctuation(runes)
+	inFence := buildFenceMask(runes)
 	start := 0
 	for i := 0; i < len(runes); i++ {
+		if inFence[i] {
+			continue
+		}
 		if isSentenceBoundary(runes, i, insidePaired) {
 			end := i + 1
 			if end > start {
@@ -196,6 +204,54 @@ func isSentenceBoundary(runes []rune, i int, insidePaired []bool) bool {
 		return i > 0 && runes[i-1] == '\n'
 	}
 	return false
+}
+
+// buildFenceMask returns a boolean slice where true marks rune positions
+// inside fenced code blocks (``` ... ```). This is a defense-in-depth
+// measure: if the protectedSpans regex misses a code fence, the sentence
+// splitter still won't cut inside it.
+func buildFenceMask(runes []rune) []bool {
+	mask := make([]bool, len(runes))
+	inFence := false
+	fenceStart := 0
+	i := 0
+	for i < len(runes) {
+		if runes[i] == '\n' || i == 0 {
+			lineStart := i
+			if runes[i] == '\n' {
+				lineStart = i + 1
+			}
+			j := lineStart
+			for j < len(runes) && (runes[j] == ' ' || runes[j] == '\t') {
+				j++
+			}
+			if j+2 < len(runes) && runes[j] == '`' && runes[j+1] == '`' && runes[j+2] == '`' {
+				if !inFence {
+					inFence = true
+					fenceStart = lineStart
+				} else {
+					end := j + 3
+					for end < len(runes) && runes[end] != '\n' {
+						end++
+					}
+					if end < len(runes) {
+						end++
+					}
+					for k := fenceStart; k < end && k < len(runes); k++ {
+						mask[k] = true
+					}
+					inFence = false
+				}
+			}
+		}
+		i++
+	}
+	if inFence {
+		for k := fenceStart; k < len(runes); k++ {
+			mask[k] = true
+		}
+	}
+	return mask
 }
 
 func insidePairedPunctuation(runes []rune) []bool {
@@ -298,7 +354,8 @@ func buildSemanticChunks(runes []rune, sentences []sentenceSpan, breakAfter map[
 			groupStart = i + 1
 		}
 	}
-	return coalesceTinySemanticChunks(chunks, semanticBreakAfterChunk, cfg)
+	protSpans := protectedSpansRuneFor(string(runes))
+	return coalesceTinySemanticChunks(chunks, semanticBreakAfterChunk, cfg, protSpans)
 }
 
 // coalesceTinySemanticChunks merges chunks whose trimmed rune length is below
@@ -306,7 +363,7 @@ func buildSemanticChunks(runes []rune, sentences []sentenceSpan, breakAfter map[
 // this function respects semantic breakpoints: it will never merge two chunks
 // across a boundary that was created by a semantic embedding distance above the
 // configured percentile threshold.
-func coalesceTinySemanticChunks(chunks []Chunk, semanticBreakAfter map[int]bool, cfg SplitterConfig) []Chunk {
+func coalesceTinySemanticChunks(chunks []Chunk, semanticBreakAfter map[int]bool, cfg SplitterConfig, protSpans []span) []Chunk {
 	if len(chunks) < 2 {
 		return chunks
 	}
@@ -326,18 +383,18 @@ func coalesceTinySemanticChunks(chunks []Chunk, semanticBreakAfter map[int]bool,
 		if i > 0 && semanticBreakAfter[i-1] {
 			// Try merging forward into the next chunk instead, but only if
 			// there is no semantic break after the current chunk either.
-			if i+1 < len(chunks) && !semanticBreakAfter[i] {
+			if i+1 < len(chunks) && !semanticBreakAfter[i] && !mergeCrossesProtectedSpan(chunk.Start, chunks[i+1].End, protSpans) {
 				chunks[i+1] = mergeSemanticChunks(chunk, chunks[i+1])
 				continue
 			}
 			// If a tiny fragment is boxed in by semantic breakpoints on both
 			// sides, keeping it standalone is worse for retrieval than crossing
 			// one boundary. Prefer the previous neighbor when it fits.
-			if len(out) > 0 && canMergeSemanticChunks(out[len(out)-1], chunk, cfg) {
+			if len(out) > 0 && canMergeSemanticChunks(out[len(out)-1], chunk, cfg) && !mergeCrossesProtectedSpan(out[len(out)-1].Start, chunk.End, protSpans) {
 				out[len(out)-1] = mergeSemanticChunks(out[len(out)-1], chunk)
 				continue
 			}
-			if i+1 < len(chunks) && canMergeSemanticChunks(chunk, chunks[i+1], cfg) {
+			if i+1 < len(chunks) && canMergeSemanticChunks(chunk, chunks[i+1], cfg) && !mergeCrossesProtectedSpan(chunk.Start, chunks[i+1].End, protSpans) {
 				chunks[i+1] = mergeSemanticChunks(chunk, chunks[i+1])
 				continue
 			}
@@ -349,7 +406,7 @@ func coalesceTinySemanticChunks(chunks []Chunk, semanticBreakAfter map[int]bool,
 		// do not merge forward across it.
 		if semanticBreakAfter[i] {
 			// Try merging backward instead.
-			if len(out) > 0 && canMergeSemanticChunks(out[len(out)-1], chunk, cfg) {
+			if len(out) > 0 && canMergeSemanticChunks(out[len(out)-1], chunk, cfg) && !mergeCrossesProtectedSpan(out[len(out)-1].Start, chunk.End, protSpans) {
 				out[len(out)-1] = mergeSemanticChunks(out[len(out)-1], chunk)
 				continue
 			}
@@ -358,11 +415,11 @@ func coalesceTinySemanticChunks(chunks []Chunk, semanticBreakAfter map[int]bool,
 		}
 
 		// No semantic break on either side — use the default merge logic.
-		if len(out) > 0 && canMergeSemanticChunks(out[len(out)-1], chunk, cfg) {
+		if len(out) > 0 && canMergeSemanticChunks(out[len(out)-1], chunk, cfg) && !mergeCrossesProtectedSpan(out[len(out)-1].Start, chunk.End, protSpans) {
 			out[len(out)-1] = mergeSemanticChunks(out[len(out)-1], chunk)
 			continue
 		}
-		if i+1 < len(chunks) {
+		if i+1 < len(chunks) && !mergeCrossesProtectedSpan(chunk.Start, chunks[i+1].End, protSpans) {
 			chunks[i+1] = mergeSemanticChunks(chunk, chunks[i+1])
 			continue
 		}
@@ -376,7 +433,7 @@ func coalesceTinySemanticChunks(chunks []Chunk, semanticBreakAfter map[int]bool,
 }
 
 func tinySemanticChunkThreshold(cfg SplitterConfig) int {
-	threshold := 50
+	threshold := 80
 	if cfg.ChunkSize > 0 && cfg.ChunkSize/4 > threshold {
 		threshold = cfg.ChunkSize / 4
 	}

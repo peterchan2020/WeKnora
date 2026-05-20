@@ -430,8 +430,8 @@ const WIKI_ONLY_CHUNKING_PRESET = {
 // the same numbers whether the editor sets them or the splitter
 // falls back to its package defaults.
 const DEFAULT_CHUNKING_PRESET = {
-  chunkSize: 1024,
-  chunkOverlap: 256,
+  chunkSize: 512,
+  chunkOverlap: 80,
   enableParentChild: true,
 } as const
 
@@ -503,15 +503,15 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
       wikiSynthesisModelId: '',
     },
     chunkingConfig: {
-      chunkSize: 1024,
-      // 256 ≈ 25% of chunkSize — improved recall for cross-boundary answers.
+      chunkSize: 512,
+      // 80 ≈ 15% of chunkSize — provides cross-boundary recall.
       // Aligned with chunker.DefaultChunkOverlap on the backend.
-      chunkOverlap: 256,
+      chunkOverlap: 80,
       separators: ['\n\n', '\n', '. ', '! ', '? ', '。', '！', '？', '; ', '；'],
       parserEngineRules: undefined as any,
       enableParentChild: true,
       parentChunkSize: 4096,
-      childChunkSize: 768,
+      childChunkSize: 384,
       // New KBs default to the adaptive auto-strategy. User can change in the UI.
       strategy: 'auto' as string,
       tokenLimit: 0,
@@ -609,15 +609,15 @@ const loadKBData = async () => {
         wikiSynthesisModelId: kb.wiki_config?.synthesis_model_id || ''
       },
       chunkingConfig: {
-        chunkSize: kb.chunking_config?.chunk_size || 1024,
+        chunkSize: kb.chunking_config?.chunk_size || 512,
         // Fallback only used when the loaded KB has no chunk_overlap stored.
         // Aligned with chunker.DefaultChunkOverlap on the backend.
-        chunkOverlap: kb.chunking_config?.chunk_overlap || 256,
+        chunkOverlap: kb.chunking_config?.chunk_overlap || 80,
         separators: kb.chunking_config?.separators || ['\n\n', '\n', '. ', '! ', '? ', '。', '！', '？', '; ', '；'],
         parserEngineRules: kb.chunking_config?.parser_engine_rules || undefined,
         enableParentChild: kb.chunking_config?.enable_parent_child || false,
         parentChunkSize: kb.chunking_config?.parent_chunk_size || 4096,
-        childChunkSize: kb.chunking_config?.child_chunk_size || 768,
+        childChunkSize: kb.chunking_config?.child_chunk_size || 384,
         // Existing KBs without strategy field render as empty (= legacy behavior).
         // The user has to actively pick a value to opt in to the new tiers.
         strategy: kb.chunking_config?.strategy || '',
@@ -1069,7 +1069,7 @@ const doSubmit = async () => {
           parserEngineRules: data.chunking_config.parser_engine_rules || undefined,
           enableParentChild: data.chunking_config.enable_parent_child || false,
           parentChunkSize: data.chunking_config.parent_chunk_size || 4096,
-          childChunkSize: data.chunking_config.child_chunk_size || 768,
+          childChunkSize: data.chunking_config.child_chunk_size || 384,
           // Always send strategy / tokenLimit / languages — backend treats
           // empty/0/[] as a valid clear, so we must include them in the
           // payload to let users reset back to defaults.

@@ -179,7 +179,7 @@ func buildParentChildConfigs(cc types.ChunkingConfig, base chunker.SplitterConfi
 	}
 	childSize := cc.ChildChunkSize
 	if childSize <= 0 {
-		childSize = 768
+		childSize = 384
 	}
 	parent = chunker.SplitterConfig{
 		ChunkSize:                    parentSize,
@@ -249,7 +249,7 @@ func (s *knowledgeService) semanticChunkingEmbedder(
 
 func semanticRefinementEnabled(cfg chunker.SplitterConfig) bool {
 	switch strings.ToLower(strings.TrimSpace(cfg.Strategy)) {
-	case chunker.StrategyAuto, chunker.StrategyHeading, chunker.StrategyHeuristic, chunker.StrategySemantic:
+	case chunker.StrategyAuto, chunker.StrategyStructureAware, chunker.StrategyHeading, chunker.StrategyHeuristic:
 		return true
 	default:
 		return false
@@ -307,8 +307,8 @@ func (s *knowledgeService) splitParentChildWithSemantic(
 
 func normalizeSemanticAlias(strategy string) string {
 	switch strings.ToLower(strings.TrimSpace(strategy)) {
-	case chunker.StrategySemantic:
-		return chunker.StrategyHeuristic
+	case "semantic":
+		return chunker.StrategyStructureAware
 	default:
 		return strategy
 	}

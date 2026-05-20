@@ -159,11 +159,82 @@ func TestCoalesceTinySemanticChunks_MergesChunkBelowQuarterSize(t *testing.T) {
 		{Content: right, Seq: 2, Start: 500, End: 800},
 	}
 
-	got := coalesceTinySemanticChunks(chunks, nil, SplitterConfig{ChunkSize: 1000})
+	got := coalesceTinySemanticChunks(chunks, nil, SplitterConfig{ChunkSize: 1000}, nil)
 	if len(got) != 2 {
 		t.Fatalf("middle chunk below chunkSize/4 should merge, got %d chunks", len(got))
 	}
 	if got[0].Content != left+middle {
 		t.Fatalf("middle chunk should merge backward, got first chunk length %d", len([]rune(got[0].Content)))
+	}
+}
+
+func TestBuildFenceMask_Basic(t *testing.T) {
+	text := "before\n```python\ndef foo():\n    pass\n```\nafter"
+	runes := []rune(text)
+	mask := buildFenceMask(runes)
+
+	beforeEnd := strings.Index(text, "```python")
+	fenceEnd := strings.Index(text, "after")
+	for i := 0; i < beforeEnd; i++ {
+		if mask[i] {
+			t.Errorf("rune %d (%c) should not be inside fence", i, runes[i])
+		}
+	}
+	for i := beforeEnd; i < fenceEnd; i++ {
+		if !mask[i] {
+			t.Errorf("rune %d (%c) should be inside fence", i, runes[i])
+		}
+	}
+	for i := fenceEnd; i < len(runes); i++ {
+		if mask[i] {
+			t.Errorf("rune %d (%c) should not be inside fence", i, runes[i])
+		}
+	}
+}
+
+func TestBuildFenceMask_UnclosedFence(t *testing.T) {
+	text := "before\n```\ncode here\nmore code"
+	runes := []rune(text)
+	mask := buildFenceMask(runes)
+
+	fenceStart := strings.Index(text, "```")
+	for i := fenceStart; i < len(runes); i++ {
+		if !mask[i] {
+			t.Errorf("rune %d should be inside unclosed fence", i)
+		}
+	}
+}
+
+func TestSplitPlainSentences_PreservesCodeFence(t *testing.T) {
+	text := "Here is code.\n```\nx = 1. y = 2.\n```\nDone."
+	runes := []rune(text)
+	spans := splitPlainSentences(runes, 0)
+
+	for _, sp := range spans {
+		content := string(runes[sp.start:sp.end])
+		opens := strings.Count(content, "```")
+		if opens%2 != 0 && opens != 0 {
+			t.Errorf("sentence span has unmatched fence: %q", content)
+		}
+	}
+}
+
+func TestSplitSemantic_ShortTextNoFragments(t *testing.T) {
+	text := "Short text. Only 30 chars or so."
+	cfg := SplitterConfig{
+		ChunkSize:                    500,
+		ChunkOverlap:                 0,
+		SemanticBufferSize:           0,
+		SemanticBreakpointPercentile: 80,
+	}
+
+	chunks, err := SplitSemantic(context.Background(), text, cfg, fakeSemanticEmbedder{})
+	if err != nil {
+		t.Fatalf("SplitSemantic returned error: %v", err)
+	}
+	for i, c := range chunks {
+		if len([]rune(strings.TrimSpace(c.Content))) < 50 && len(chunks) > 1 {
+			t.Errorf("chunk[%d] is a tiny fragment (%d runes): %q", i, len([]rune(c.Content)), c.Content)
+		}
 	}
 }

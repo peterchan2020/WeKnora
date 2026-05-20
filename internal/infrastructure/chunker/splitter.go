@@ -96,25 +96,15 @@ type SplitterConfig struct {
 // numbers in its initial form state — keep them in sync if you change
 // either value here.
 //
-// DefaultChunkSize = 1024 chars: ~200–260 English tokens / ~600 Chinese
-// tokens. Raised from 512 to reduce answer fragmentation (answer_in_one_chunk
-// improved from 0.45 to ~0.7+ in OHR evaluation). Use 200–400 for FAQ-style
-// atomic content, 512 for short-form Q&A, 2000+ for narrative documents.
+// DefaultChunkSize = 512 chars: ~100–130 English tokens / ~300 Chinese
+// tokens. Use 200–400 for FAQ-style atomic content, 1024+ for narrative
+// documents where answer_in_one_chunk matters.
 //
-// DefaultChunkOverlap = 256 chars (≈25% of DefaultChunkSize): improved
-// recall for answers split across chunk boundaries. Use 0 for strictly
-// atomic data (FAQ, JSON records), 64–128 for short narratives where
-// overlap cost matters more than cross-boundary recall.
-//
-// Existing knowledge bases that stored ChunkOverlap=0 in the DB pick
-// this 256 up on next re-index; their previously-indexed embeddings will
-// not match new ones bit-for-bit. Recall stays similar but search
-// ranking can shift slightly. To freeze the old behavior on a per-KB
-// basis, explicitly set ChunkingConfig.ChunkOverlap to the desired
-// value before re-indexing.
+// DefaultChunkOverlap = 80 chars (~15% of DefaultChunkSize): provides
+// cross-boundary recall without excessive duplication.
 const (
-	DefaultChunkSize    = 1024
-	DefaultChunkOverlap = 256
+	DefaultChunkSize    = 512
+	DefaultChunkOverlap = 80
 )
 
 // DefaultConfig returns sensible defaults.
@@ -138,7 +128,7 @@ var protectedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?is)<table\b[^>]*>.*?</table>`),                                                // HTML tables
 	regexp.MustCompile("(?m)[ ]*(?:\\|[^|\\n]*)+\\|[\\r\\n]+\\s*(?:\\|\\s*:?-{3,}:?\\s*)+\\|[\\r\\n]+"), // Table header+separator
 	regexp.MustCompile("(?m)[ ]*(?:\\|[^|\\n]*)+\\|[\\r\\n]+"),                                          // Table rows
-	regexp.MustCompile("(?s)```(?:\\w+)?[\\r\\n].*?```"),                                                // Fenced code blocks
+	regexp.MustCompile("(?s)```(?:\\w+)?[ \\t]*(?:\\r?\\n)?.*?```"),                                      // Fenced code blocks
 }
 
 type span struct {
@@ -214,6 +204,54 @@ func protectedSpans(text string) []span {
 		}
 	}
 	return result
+}
+
+// protectedSpansRuneFor computes rune-offset protected spans for text in a
+// single call. This is the canonical way to get protected spans for merge
+// decisions — callers should use this instead of calling protectedSpansRune
+// and protectedSpans separately.
+func protectedSpansRuneFor(text string) []span {
+	return protectedSpansRune(text, protectedSpans(text))
+}
+
+// mergeCrossesProtectedSpan checks whether merging chunks that cover the
+// rune range [mergeStart, mergeEnd) would split any protected span (LaTeX
+// block, fenced code, etc.) in half. A span is split if it starts inside
+// the merge range but ends outside, or starts before the range but ends
+// inside. Spans fully contained within or fully containing the range are
+// fine. The spans must be sorted by start (protectedSpans guarantees this).
+func mergeCrossesProtectedSpan(mergeStart, mergeEnd int, spans []span) bool {
+	for _, s := range spans {
+		if s.start >= mergeEnd {
+			break
+		}
+		// Span starts inside merge range but ends after it → split.
+		if s.start >= mergeStart && s.end > mergeEnd {
+			return true
+		}
+		// Span starts before merge range but ends inside it → split.
+		if s.start < mergeStart && s.end > mergeStart {
+			return true
+		}
+	}
+	return false
+}
+
+// adjustOutOfSpan returns pos adjusted so it does not fall inside any
+// protected span. If pos is inside a span, it returns span.end (push
+// forward past the span). If pos is not inside any span, it returns pos
+// unchanged. When spans is nil or empty, returns pos unchanged.
+// Spans must be sorted by start.
+func adjustOutOfSpan(pos int, spans []span) int {
+	for _, s := range spans {
+		if s.start > pos {
+			break
+		}
+		if pos >= s.start && pos < s.end {
+			return s.end
+		}
+	}
+	return pos
 }
 
 // splitUnit is a piece of text with its original position.
@@ -434,8 +472,11 @@ func SplitText(text string, cfg SplitterConfig) []Chunk {
 		chunkOverlap = 0
 	}
 
-	// Step 1: Find protected spans
+	// Step 1: Find protected spans (byte offsets) and precompute rune-offset
+	// spans for downstream merge decisions. This avoids redundant regex scans
+	// in coalesceOrphanHeadings and other coalesce functions.
 	protected := protectedSpans(text)
+	protSpans := protectedSpansRune(text, protected)
 
 	// Step 2: Split non-protected regions by separators, keep protected as atomic units.
 	// chunkSize is forwarded so splitBySeparators can recursively apply lower-priority
@@ -451,7 +492,7 @@ func SplitText(text string, cfg SplitterConfig) []Chunk {
 
 	// Step 3b: Merge heading-only chunks into their next neighbor so titles
 	// are never orphaned as standalone fragments.
-	chunks = coalesceOrphanHeadings(chunks, chunkSize)
+	chunks = coalesceOrphanHeadings(chunks, chunkSize, protSpans)
 
 	// Step 3c: Re-split any chunks that still exceed 1.5x chunkSize at
 	// paragraph/sentence boundaries. This catches oversized chunks produced
@@ -461,13 +502,15 @@ func SplitText(text string, cfg SplitterConfig) []Chunk {
 	// Step 3d: Re-run orphan heading coalescence after resplitting. The
 	// resplit pass can produce new heading-only fragments when it cuts an
 	// oversized chunk at a paragraph break that follows a heading line.
-	chunks = coalesceOrphanHeadings(chunks, chunkSize)
+	chunks = coalesceOrphanHeadings(chunks, chunkSize, protSpans)
 
 	return chunks
 }
 
 // resplitOversizedChunks re-splits any chunk whose Content exceeds 1.5×
-// chunkSize at paragraph or sentence boundaries.
+// chunkSize at paragraph or sentence boundaries. Protected spans (math
+// formulas, code blocks) are computed per chunk and respected so they are
+// not split across sub-chunks.
 func resplitOversizedChunks(chunks []Chunk, chunkSize int) []Chunk {
 	if len(chunks) == 0 || chunkSize <= 0 {
 		return chunks
@@ -482,7 +525,11 @@ func resplitOversizedChunks(chunks []Chunk, chunkSize int) []Chunk {
 			continue
 		}
 
-		parts := splitOversizedRunes(runes, chunkSize)
+		// Compute protected spans for this chunk's content (offsets are
+		// local to the chunk, not the original document).
+		chunkSpans := protectedSpansRune(c.Content, protectedSpans(c.Content))
+
+		parts := splitOversizedRunes(runes, chunkSize, chunkSpans)
 		offset := c.Start
 		for _, part := range parts {
 			partLen := len(part)
@@ -506,7 +553,10 @@ func resplitOversizedChunks(chunks []Chunk, chunkSize int) []Chunk {
 
 // splitOversizedRunes splits an oversized rune slice into pieces that are
 // each ≤ chunkSize runes, preferring paragraph then sentence boundaries.
-func splitOversizedRunes(runes []rune, chunkSize int) [][]rune {
+// When spans is non-nil, split points that fall inside a protected span are
+// adjusted past the span's end (or before its start) so formulas and code
+// blocks are not split across chunks.
+func splitOversizedRunes(runes []rune, chunkSize int, spans []span) [][]rune {
 	if len(runes) <= chunkSize {
 		return [][]rune{runes}
 	}
@@ -514,7 +564,7 @@ func splitOversizedRunes(runes []rune, chunkSize int) [][]rune {
 	var parts [][]rune
 	start := 0
 	for start < len(runes) {
-		end := findBestSplitPoint(runes, start, chunkSize)
+		end := findBestSplitPoint(runes, start, chunkSize, spans)
 		parts = append(parts, runes[start:end])
 		start = end
 	}
@@ -525,7 +575,13 @@ func splitOversizedRunes(runes []rune, chunkSize int) [][]rune {
 // chunk of at most chunkSize runes. Prefers \n\n, then \n, then CJK sentence
 // boundaries (no space required), then English sentence boundaries (with
 // abbreviation awareness), then clause boundaries, then a hard cut as last resort.
-func findBestSplitPoint(runes []rune, start, chunkSize int) int {
+//
+// When spans is non-nil, the chosen split point is adjusted out of any protected
+// span it falls inside. If the split point is inside a span, it is pushed to
+// span.end (keeping the span in the left chunk). If span.end exceeds the search
+// range, it retreats to span.start. If neither works, it returns the end of the
+// range to keep the span intact as one oversized chunk.
+func findBestSplitPoint(runes []rune, start, chunkSize int, spans []span) int {
 	maxEnd := start + chunkSize
 	if maxEnd >= len(runes) {
 		return len(runes)
@@ -534,14 +590,14 @@ func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 	// Paragraph break (\n\n).
 	for i := maxEnd; i > start+1; i-- {
 		if runes[i-1] == '\n' && runes[i] == '\n' {
-			return i + 1
+			return adjustSplitOutOfSpans(i+1, start, len(runes), spans)
 		}
 	}
 
 	// Single newline.
 	for i := maxEnd; i > start; i-- {
 		if runes[i] == '\n' {
-			return i + 1
+			return adjustSplitOutOfSpans(i+1, start, len(runes), spans)
 		}
 	}
 
@@ -551,7 +607,7 @@ func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 	for i := maxEnd; i > start+1; i-- {
 		r := runes[i-1]
 		if r == '。' || r == '！' || r == '？' {
-			return i
+			return adjustSplitOutOfSpans(i, start, len(runes), spans)
 		}
 	}
 
@@ -563,7 +619,7 @@ func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 			}
 			after := i
 			if after < len(runes) && unicode.IsSpace(runes[after]) {
-				return after
+				return adjustSplitOutOfSpans(after, start, len(runes), spans)
 			}
 		}
 	}
@@ -573,7 +629,7 @@ func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 		if clauseEndRunes[runes[i-1]] {
 			after := i
 			if after < len(runes) && (unicode.IsSpace(runes[after]) || runes[after] == '\n') {
-				return after
+				return adjustSplitOutOfSpans(after, start, len(runes), spans)
 			}
 		}
 	}
@@ -586,7 +642,33 @@ func findBestSplitPoint(runes []rune, start, chunkSize int) int {
 	}
 
 	// Hard cut (last resort).
-	return maxEnd
+	return adjustSplitOutOfSpans(maxEnd, start, len(runes), spans)
+}
+
+// adjustSplitOutOfSpans adjusts a split point so it does not fall inside a
+// protected span. If pos is inside a span, it pushes to span.end (keeping
+// the span in the left chunk). If span.end > totalLen (unrealistic but
+// defensive), it retreats to span.start. If neither works, returns
+// totalLen to keep the span intact.
+func adjustSplitOutOfSpans(pos, start, totalLen int, spans []span) int {
+	if len(spans) == 0 {
+		return pos
+	}
+	for _, s := range spans {
+		if s.start > pos {
+			break
+		}
+		if pos >= s.start && pos < s.end {
+			if s.end <= totalLen {
+				return s.end
+			}
+			if s.start > start {
+				return s.start
+			}
+			return totalLen
+		}
+	}
+	return pos
 }
 
 // buildUnitsWithProtection splits text into units, preserving protected spans as atomic.
@@ -727,7 +809,7 @@ func attachFormulaContext(units []splitUnit, chunkSize int) []splitUnit {
 // very-small chunks so that chains like "# 7.4." → "# 7.6.4." → "7.6.4.2."
 // are all absorbed into the next real-content chunk rather than being merged
 // pair-wise and emitting tiny intermediate chunks.
-func coalesceOrphanHeadings(chunks []Chunk, chunkSize int) []Chunk {
+func coalesceOrphanHeadings(chunks []Chunk, chunkSize int, protSpans []span) []Chunk {
 	if len(chunks) <= 1 || chunkSize <= 0 {
 		return chunks
 	}
@@ -754,10 +836,31 @@ func coalesceOrphanHeadings(chunks []Chunk, chunkSize int) []Chunk {
 		return false
 	}
 
+	// pendingRunesCovered returns the rune range [start, end) covered by
+	// pendingHeadings. Used to check protected-span crossings.
+	pendingRunesCovered := func() (start, end int) {
+		if len(pendingHeadings) == 0 {
+			return 0, 0
+		}
+		start = pendingHeadings[0].Start
+		end = pendingHeadings[len(pendingHeadings)-1].End
+		return
+	}
+
 	flushPending := func(target *Chunk) {
 		if len(pendingHeadings) == 0 {
 			return
 		}
+		// Check if merging pending headings into target would cross a
+		// protected span boundary (e.g. split a $$..$$ block).
+		pStart, _ := pendingRunesCovered()
+		mergeStart := pStart
+		mergeEnd := target.End
+		if mergeStart > target.Start {
+			mergeStart = target.Start
+		}
+		crossesProtected := mergeCrossesProtectedSpan(mergeStart, mergeEnd, protSpans)
+
 		// Separate pure headings from non-heading tiny chunks.
 		// Only pure headings go into ContextHeader; all tiny chunks go into Content.
 		var headingParts []string // pure headings → ContextHeader breadcrumb
@@ -775,7 +878,7 @@ func coalesceOrphanHeadings(chunks []Chunk, chunkSize int) []Chunk {
 		mergedContent := strings.Join(contentParts, "\n\n") + "\n\n" + strings.TrimSpace(target.Content)
 		combinedLen := utf8.RuneCountInString(mergedContent)
 
-		if combinedLen <= chunkSize {
+		if combinedLen <= chunkSize && !crossesProtected {
 			// Budget allows: prepend all tiny chunk text into Content so it's
 			// retrievable by search.
 			target.Content = mergedContent
@@ -783,8 +886,9 @@ func coalesceOrphanHeadings(chunks []Chunk, chunkSize int) []Chunk {
 			pendingHeadings = nil
 			return
 		}
-		// Budget exceeded: promote heading context but emit non-heading tiny
-		// chunks as standalone output rather than silently dropping them.
+		// Budget exceeded or protected span would be crossed: promote heading
+		// context but emit non-heading tiny chunks as standalone output rather
+		// than silently dropping them.
 		if mergedHeader != "" {
 			target.ContextHeader = mergeBreadcrumbs(mergedHeader, target.ContextHeader)
 		}
@@ -947,7 +1051,45 @@ var abbreviationSet = map[string]bool{
 // the original `end` if no suitable boundary is found that keeps the chunk at
 // least `minSize` runes long. Used by the heuristic splitter's bin-packing to
 // avoid flushing mid-sentence.
-func snapRuneToSentenceEnd(runes []rune, start, end, minSize int) int {
+//
+// When spans is non-nil, the snapped position is adjusted out of any protected
+// span it falls inside. If adjustment pushes past end, the function tries
+// retreating before the span (re-snapping within [start, spanStart)); if that
+// also fails, it returns end to keep the protected span intact as one chunk.
+func snapRuneToSentenceEnd(runes []rune, start, end, minSize int, spans []span) int {
+	if end <= start || end-start < minSize {
+		return end
+	}
+
+	snapped := snapRuneToSentenceEndInner(runes, start, end, minSize)
+
+	if len(spans) == 0 {
+		return snapped
+	}
+
+	adjusted := adjustOutOfSpan(snapped, spans)
+	if adjusted <= end {
+		return adjusted
+	}
+
+	// Adjustment pushed past end — try retreating before the span instead.
+	for _, s := range spans {
+		if snapped >= s.start && snapped < s.end && s.start >= start+minSize {
+			retreat := snapRuneToSentenceEndInner(runes, start, s.start, minSize)
+			if retreat >= start+minSize {
+				return retreat
+			}
+			break
+		}
+	}
+	// Cannot retreat without violating minSize. Keep the protected span intact.
+	return end
+}
+
+// snapRuneToSentenceEndInner is the original sentence-snap logic without
+// protected-span awareness. Extracted so the outer function can re-call it
+// with a narrower range when retreating before a protected span.
+func snapRuneToSentenceEndInner(runes []rune, start, end, minSize int) int {
 	if end <= start || end-start < minSize {
 		return end
 	}

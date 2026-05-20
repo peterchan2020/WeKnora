@@ -287,7 +287,7 @@ func previewChunking(c *gin.Context, modelService interfaces.ModelService) {
 
 func semanticPreviewRefinementEnabled(cfg chunker.SplitterConfig) bool {
 	switch strings.ToLower(strings.TrimSpace(cfg.Strategy)) {
-	case chunker.StrategyAuto, chunker.StrategyHeading, chunker.StrategyHeuristic, chunker.StrategySemantic:
+	case chunker.StrategyAuto, chunker.StrategyStructureAware, chunker.StrategyHeading, chunker.StrategyHeuristic:
 		return true
 	default:
 		return false

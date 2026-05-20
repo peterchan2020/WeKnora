@@ -16,7 +16,7 @@ func (s *knowledgeBaseService) processSearchResults(ctx context.Context,
 	skipEnrichment bool,
 ) ([]*types.SearchResult, error) {
 	if len(chunks) == 0 {
-		return nil, nil
+		return []*types.SearchResult{}, nil
 	}
 
 	tenantID := types.MustTenantIDFromContext(ctx)

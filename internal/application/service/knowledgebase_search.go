@@ -286,6 +286,11 @@ func (s *knowledgeBaseService) buildRetrievalParams(
 	if retrieveEngine.SupportRetriever(types.KeywordsRetrieverType) && !params.DisableKeywordsMatch &&
 		kb.IsKeywordEnabled() && kb.Type != types.KnowledgeBaseTypeFAQ {
 		logger.Info(ctx, "Keyword retrieval supported, preparing keyword retrieval parameters")
+		// Keyword search intentionally uses the original query (params.QueryText)
+		// rather than the rewritten query. Keyword matching works better with the
+		// user's exact wording because BM25/TF-IDF scoring relies on term overlap,
+		// and a rewritten query may introduce terms the user never used, reducing
+		// precision for exact-match scenarios.
 		retrieveParams = append(retrieveParams, types.RetrieveParams{
 			Query:            params.QueryText,
 			KnowledgeBaseIDs: searchKBIDs,

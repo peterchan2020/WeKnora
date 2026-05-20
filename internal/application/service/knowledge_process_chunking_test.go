@@ -12,7 +12,7 @@ import (
 func TestBuildSplitterConfigPreservesSemanticZeroBuffer(t *testing.T) {
 	kb := &types.KnowledgeBase{
 		ChunkingConfig: types.ChunkingConfig{
-			Strategy:                     chunker.StrategySemantic,
+			Strategy:                     chunker.StrategyStructureAware,
 			SemanticBufferSize:           0,
 			SemanticBreakpointPercentile: 0,
 		},
@@ -95,7 +95,7 @@ func TestNormalizeSemanticAlias(t *testing.T) {
 		strategy string
 		want     string
 	}{
-		{name: "semantic maps to heuristic", strategy: chunker.StrategySemantic, want: chunker.StrategyHeuristic},
+		{name: "semantic maps to structure_aware", strategy: "semantic", want: chunker.StrategyStructureAware},
 		{name: "empty is preserved", strategy: "", want: ""},
 		{name: "explicit heading is preserved", strategy: chunker.StrategyHeading, want: chunker.StrategyHeading},
 		{name: "explicit heuristic is preserved", strategy: chunker.StrategyHeuristic, want: chunker.StrategyHeuristic},

@@ -261,7 +261,7 @@ func TestCoalesceTinyHeuristicChunks_MergesInteriorTinyChunks(t *testing.T) {
 		{Content: "(2)", Seq: 1, Start: 6, End: 9},
 		{Content: "BBBBBB", Seq: 2, Start: 9, End: 15},
 	}
-	result := coalesceTinyHeuristicChunks(chunks, runes, 512)
+	result := coalesceTinyHeuristicChunks(chunks, runes, 512, nil)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 chunks after coalescing, got %d", len(result))
 	}
@@ -288,7 +288,7 @@ func TestCoalesceTinyHeuristicChunks_UsesQuarterChunkSizeThreshold(t *testing.T)
 		{Content: right, Seq: 2, Start: 500, End: 800},
 	}
 
-	result := coalesceTinyHeuristicChunks(chunks, runes, 1000)
+	result := coalesceTinyHeuristicChunks(chunks, runes, 1000, nil)
 	if len(result) != 2 {
 		t.Fatalf("middle chunk below chunkSize/4 should merge, got %d chunks", len(result))
 	}
@@ -304,7 +304,7 @@ func TestCoalesceTinyHeuristicChunks_MergesForwardWhenPrevTooLarge(t *testing.T)
 		{Content: "(2)", Seq: 1, Start: 200, End: 203},
 		{Content: strings.Repeat("B", 10), Seq: 2, Start: 203, End: 213},
 	}
-	result := coalesceTinyHeuristicChunks(chunks, runes, 200)
+	result := coalesceTinyHeuristicChunks(chunks, runes, 200, nil)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 chunks after coalescing, got %d", len(result))
 	}
@@ -324,7 +324,7 @@ func TestCoalesceTinyHeuristicChunks_PreservesFirstAndLast(t *testing.T) {
 		{Content: "BBBBBB", Seq: 1, Start: 2, End: 8},
 		{Content: "cd", Seq: 2, Start: 8, End: 10},
 	}
-	result := coalesceTinyHeuristicChunks(chunks, runes, 512)
+	result := coalesceTinyHeuristicChunks(chunks, runes, 512, nil)
 	// First and last chunks should not be merged away even if tiny.
 	if len(result) < 2 {
 		t.Fatalf("expected at least 2 chunks, got %d", len(result))
@@ -341,7 +341,7 @@ func TestCoalesceTinyHeuristicChunks_OverlappingChunks(t *testing.T) {
 		{Content: string(runes[8:12]), Seq: 1, Start: 8, End: 12},
 		{Content: string(runes[8:30]), Seq: 2, Start: 8, End: 30},
 	}
-	result := coalesceTinyHeuristicChunks(chunks, runes, 512)
+	result := coalesceTinyHeuristicChunks(chunks, runes, 512, nil)
 	// Tiny chunk should be merged into previous.
 	if len(result) != 2 {
 		t.Fatalf("expected 2 chunks after coalescing, got %d", len(result))
@@ -365,7 +365,7 @@ func TestCoalesceTinyHeuristicChunks_DoesNotMutateInput(t *testing.T) {
 	original := make([]Chunk, len(chunks))
 	copy(original, chunks)
 
-	_ = coalesceTinyHeuristicChunks(chunks, runes, 512)
+	_ = coalesceTinyHeuristicChunks(chunks, runes, 512, nil)
 
 	for i := range chunks {
 		if chunks[i].Content != original[i].Content || chunks[i].Seq != original[i].Seq ||
@@ -384,7 +384,7 @@ func TestCoalesceTinyHeuristicChunks_ReSequences(t *testing.T) {
 		{Content: "(3)", Seq: 3, Start: 15, End: 18},
 		{Content: "CCCCCC", Seq: 4, Start: 18, End: 24},
 	}
-	result := coalesceTinyHeuristicChunks(chunks, runes, 512)
+	result := coalesceTinyHeuristicChunks(chunks, runes, 512, nil)
 	for i, c := range result {
 		if c.Seq != i {
 			t.Errorf("chunk %d Seq = %d, want %d", i, c.Seq, i)
@@ -408,7 +408,7 @@ func TestCoalesceTinyHeuristicChunks_ConsecutiveTinyChunks(t *testing.T) {
 		{Content: "z", Seq: 3, Start: 202, End: 203},
 		{Content: strings.Repeat("B", 200), Seq: 4, Start: 203, End: 403},
 	}
-	result := coalesceTinyHeuristicChunks(chunks, runes, 200)
+	result := coalesceTinyHeuristicChunks(chunks, runes, 200, nil)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 chunks after coalescing, got %d", len(result))
 	}

@@ -308,7 +308,7 @@ const localChunkOverlap = ref(props.config.chunkOverlap)
 const localSeparators = ref([...props.config.separators])
 const localEnableParentChild = ref(props.config.enableParentChild ?? false)
 const localParentChunkSize = ref(props.config.parentChunkSize || 4096)
-const localChildChunkSize = ref(props.config.childChunkSize || 768)
+const localChildChunkSize = ref(props.config.childChunkSize || 384)
 function normalizeStrategy(strategy?: string) {
   return strategy === 'semantic' ? 'heuristic' : (strategy ?? '')
 }
@@ -396,7 +396,7 @@ watch(() => props.config, (newConfig) => {
   localSeparators.value = [...newConfig.separators]
   localEnableParentChild.value = newConfig.enableParentChild ?? false
   localParentChunkSize.value = newConfig.parentChunkSize || 4096
-  localChildChunkSize.value = newConfig.childChunkSize || 768
+  localChildChunkSize.value = newConfig.childChunkSize || 384
   localStrategy.value = normalizeStrategy(newConfig.strategy)
   localTokenLimit.value = newConfig.tokenLimit ?? 0
   localLanguages.value = [...(newConfig.languages ?? [])]

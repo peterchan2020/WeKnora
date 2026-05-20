@@ -62,12 +62,13 @@ func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile,
 	totalRunes := len(runes)
 
 	bounds := findHeuristicBoundaries(text, cfg.Languages)
+	protSpans := protectedSpansRuneFor(text)
 	// Drop any boundary that falls strictly inside a protected region (table,
 	// fenced code block, LaTeX block, etc.) — splitting there would cut
 	// through atomic content. Boundaries on a span edge are kept since they
 	// align with the protected region start/end.
-	if prot := protectedSpansRune(text, protectedSpans(text)); len(prot) > 0 {
-		bounds = dropBoundsInsideSpans(bounds, prot)
+	if len(protSpans) > 0 {
+		bounds = dropBoundsInsideSpans(bounds, protSpans)
 	}
 	if len(bounds) == 0 {
 		if shouldPreserveParagraphBlocks(cfg) {
@@ -125,7 +126,7 @@ func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile,
 			// Snap the flush end to the nearest preceding sentence boundary
 			// so we don't cut mid-sentence. Only snap when the snapped
 			// position is still >= minChunkSize from chunkStart.
-			flushEnd := snapRuneToSentenceEnd(runes, chunkStart, curEnd, minChunkSize)
+			flushEnd := snapRuneToSentenceEnd(runes, chunkStart, curEnd, minChunkSize, protSpans)
 			out = appendChunk(out, runes, chunkStart, flushEnd, &seq)
 			// Snap overlap start to the nearest semantic boundary or line
 			// break instead of slicing mid-line / mid-word.
@@ -138,12 +139,12 @@ func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile,
 	if curEnd > chunkStart {
 		out = appendChunk(out, runes, chunkStart, curEnd, &seq)
 	}
-	return coalesceOrphanHeadings(groupReferenceEntries(coalesceTinyHeuristicChunks(out, runes, cfg.ChunkSize), runes, cfg.ChunkSize), cfg.ChunkSize)
+	return coalesceOrphanHeadings(groupReferenceEntries(coalesceTinyHeuristicChunks(out, runes, cfg.ChunkSize, protSpans), runes, cfg.ChunkSize), cfg.ChunkSize, protSpans)
 }
 
 func shouldPreserveParagraphBlocks(cfg SplitterConfig) bool {
 	switch strings.ToLower(strings.TrimSpace(cfg.Strategy)) {
-	case StrategyHeuristic, StrategySemantic:
+	case StrategyHeuristic, StrategyStructureAware:
 		return true
 	default:
 		return false
@@ -155,6 +156,8 @@ func splitByParagraphBlocks(text string, cfg SplitterConfig) []Chunk {
 		return nil
 	}
 	runes := []rune(text)
+	byteSpans := protectedSpans(text)
+	runeSpans := protectedSpansRune(text, byteSpans)
 	var out []Chunk
 	seq := 0
 	blockStart := 0
@@ -163,12 +166,27 @@ func splitByParagraphBlocks(text string, cfg SplitterConfig) []Chunk {
 		if !ok {
 			continue
 		}
+		if insideAnySpan(end, runeSpans) {
+			continue
+		}
 		out = appendParagraphBlock(out, runes, blockStart, end, cfg, &seq)
 		blockStart = end
 		i = end - 1
 	}
 	out = appendParagraphBlock(out, runes, blockStart, len(runes), cfg, &seq)
 	return out
+}
+
+func insideAnySpan(pos int, spans []span) bool {
+	for _, s := range spans {
+		if s.start > pos {
+			return false
+		}
+		if pos >= s.start && pos < s.end {
+			return true
+		}
+	}
+	return false
 }
 
 func countParagraphBreaks(text string) int {
@@ -427,7 +445,7 @@ func tinyHeuristicThreshold(chunkSize int) int {
 	return threshold
 }
 
-func coalesceTinyHeuristicChunks(chunks []Chunk, runes []rune, chunkSize int) []Chunk {
+func coalesceTinyHeuristicChunks(chunks []Chunk, runes []rune, chunkSize int, protSpans []span) []Chunk {
 	if len(chunks) <= 2 || chunkSize <= 0 {
 		return chunks
 	}
@@ -460,7 +478,7 @@ func coalesceTinyHeuristicChunks(chunks []Chunk, runes []rune, chunkSize int) []
 				prev := &result[len(result)-1]
 				newEnd := out[i].End
 				newLen := newEnd - prev.Start
-				if newLen <= chunkSize {
+				if newLen <= chunkSize && !mergeCrossesProtectedSpan(prev.Start, newEnd, protSpans) {
 					prev.End = newEnd
 					prev.Content = string(runes[prev.Start:newEnd])
 					populateStructuralMetadata(prev)
@@ -477,9 +495,11 @@ func coalesceTinyHeuristicChunks(chunks []Chunk, runes []rune, chunkSize int) []
 		// Non-tiny chunk: flush any accumulated tiny group by extending
 		// this chunk's start backward to cover the group.
 		if inTinyGroup {
-			out[i].Start = tinyGroupStart
-			out[i].Content = string(runes[out[i].Start:out[i].End])
-			populateStructuralMetadata(&out[i])
+			if !mergeCrossesProtectedSpan(tinyGroupStart, out[i].End, protSpans) {
+				out[i].Start = tinyGroupStart
+				out[i].Content = string(runes[out[i].Start:out[i].End])
+				populateStructuralMetadata(&out[i])
+			}
 			inTinyGroup = false
 		}
 		result = append(result, out[i])
@@ -488,9 +508,11 @@ func coalesceTinyHeuristicChunks(chunks []Chunk, runes []rune, chunkSize int) []
 	// merge it into the last result chunk so content isn't lost.
 	if inTinyGroup && len(result) > 0 {
 		prev := &result[len(result)-1]
-		prev.End = out[len(out)-1].End
-		prev.Content = string(runes[prev.Start:prev.End])
-		populateStructuralMetadata(prev)
+		if !mergeCrossesProtectedSpan(prev.Start, out[len(out)-1].End, protSpans) {
+			prev.End = out[len(out)-1].End
+			prev.Content = string(runes[prev.Start:prev.End])
+			populateStructuralMetadata(prev)
+		}
 	}
 
 	// Re-sequence.

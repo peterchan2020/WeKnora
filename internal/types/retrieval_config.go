@@ -24,6 +24,9 @@ type RetrievalConfig struct {
 	RerankThreshold float64 `json:"rerank_threshold"`
 	// RerankModelID is the ID of the rerank model to use (required for search)
 	RerankModelID string `json:"rerank_model_id"`
+	// QueryRewriteModelID is the ID of the chat model used to rewrite the search
+	// query before embedding. Empty means no rewrite (use the original query).
+	QueryRewriteModelID string `json:"query_rewrite_model_id,omitempty"`
 
 	// RRFK is the smoothing constant of Reciprocal Rank Fusion. Larger values
 	// flatten the curve, reducing the bias towards top-1 results.

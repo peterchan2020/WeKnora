@@ -118,7 +118,8 @@ func splitByHeadingsStructured(text string, cfg SplitterConfig, profile *DocProf
 					subChunks[0].ContextHeader = mergeBreadcrumbs(bc, subChunks[0].ContextHeader)
 				}
 			}
-			return coalesceOrphanHeadings(coalesceTinyChunks(subChunks, cfg.ChunkSize), cfg.ChunkSize)
+			protSpans := protectedSpansRuneFor(text)
+			return coalesceOrphanHeadings(coalesceTinyChunks(subChunks, cfg.ChunkSize), cfg.ChunkSize, protSpans)
 		}
 		return SplitText(text, cfg)
 	}
@@ -241,7 +242,8 @@ func splitByHeadingsStructured(text string, cfg SplitterConfig, profile *DocProf
 		}
 	}
 
-	return coalesceOrphanHeadings(coalesceTinyChunks(out, cfg.ChunkSize), cfg.ChunkSize)
+	protSpans := protectedSpansRuneFor(text)
+	return coalesceOrphanHeadings(coalesceTinyChunks(out, cfg.ChunkSize), cfg.ChunkSize, protSpans)
 }
 
 // coalesceTinyChunks merges adjacent small chunks under their shared heading

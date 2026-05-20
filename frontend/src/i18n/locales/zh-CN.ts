@@ -2692,7 +2692,7 @@ export default {
       parentChunkSizeLabel: "父块大小",
       parentChunkSizeDescription: "返回给 LLM 的上下文块大小（512-8192）。默认 4096 ≈ 1000 英文 tokens，适合所有现代 LLM 上下文窗口。",
       childChunkSizeLabel: "子块大小",
-      childChunkSizeDescription: "用于向量匹配的嵌入块大小（64-2048）。默认 768 ≈ 160 tokens，是 sentence-transformer / BGE 类嵌入模型的最佳点。",
+      childChunkSizeDescription: "用于向量匹配的嵌入块大小（64-2048）。默认 384 ≈ 80 tokens，是 sentence-transformer / BGE 类嵌入模型的最佳点。",
       strategyLabel: "分块策略",
       strategyDescription: "选择文档的分块方式。自动模式会分析每个文档的结构并选择最佳策略。",
       strategyPlaceholder: "选择分块策略（不填则按长度切分）",

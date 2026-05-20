@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/application/service/retriever"
+	"github.com/Tencent/WeKnora/internal/config"
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
@@ -35,6 +36,7 @@ type knowledgeBaseService struct {
 	fileSvc        interfaces.FileService
 	graphEngine    interfaces.RetrieveGraphRepository
 	asynqClient    interfaces.TaskEnqueuer
+	cfg            *config.Config
 }
 
 // NewKnowledgeBaseService creates a new knowledge base service
@@ -50,6 +52,7 @@ func NewKnowledgeBaseService(repo interfaces.KnowledgeBaseRepository,
 	fileSvc interfaces.FileService,
 	graphEngine interfaces.RetrieveGraphRepository,
 	asynqClient interfaces.TaskEnqueuer,
+	cfg *config.Config,
 ) interfaces.KnowledgeBaseService {
 	return &knowledgeBaseService{
 		repo:           repo,
@@ -64,6 +67,7 @@ func NewKnowledgeBaseService(repo interfaces.KnowledgeBaseRepository,
 		fileSvc:        fileSvc,
 		graphEngine:    graphEngine,
 		asynqClient:    asynqClient,
+		cfg:            cfg,
 	}
 }
 

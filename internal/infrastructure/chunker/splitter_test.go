@@ -1081,7 +1081,7 @@ func TestCoalesceOrphanHeadings_ContextHeaderNoPollution(t *testing.T) {
 		{Content: "some formula fragment", ContextHeader: "", Seq: 1},
 		{Content: strings.Repeat("x", 300), ContextHeader: "", Seq: 2},
 	}
-	result := coalesceOrphanHeadings(chunks, 512)
+	result := coalesceOrphanHeadings(chunks, 512, nil)
 	for _, c := range result {
 		if c.ContextHeader != "" && strings.Contains(c.ContextHeader, "formula fragment") {
 			t.Errorf("ContextHeader should not contain non-heading content, got %q", c.ContextHeader)
@@ -1094,7 +1094,7 @@ func TestCoalesceOrphanHeadings_PureHeadingInContextHeader(t *testing.T) {
 		{Content: "## 3.2 Methods\n", ContextHeader: "", Seq: 0},
 		{Content: strings.Repeat("x", 300), ContextHeader: "", Seq: 1},
 	}
-	result := coalesceOrphanHeadings(chunks, 512)
+	result := coalesceOrphanHeadings(chunks, 512, nil)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 chunk after coalescing, got %d", len(result))
 	}
@@ -1224,4 +1224,306 @@ func truncated(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+func TestMergeCrossesProtectedSpan(t *testing.T) {
+	spans := []span{{start: 10, end: 20}, {start: 50, end: 60}}
+
+	tests := []struct {
+		name       string
+		mergeStart int
+		mergeEnd   int
+		want       bool
+	}{
+		{"merge fully inside span", 12, 18, false},
+		{"merge fully contains span", 5, 25, false},
+		{"merge starts before span, ends inside", 5, 15, true},
+		{"merge starts inside span, ends after", 15, 25, true},
+		{"merge before all spans", 0, 8, false},
+		{"merge after all spans", 65, 70, false},
+		{"merge between spans", 25, 45, false},
+		{"merge crosses second span start", 45, 55, true},
+		{"merge exactly matches span", 10, 20, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeCrossesProtectedSpan(tt.mergeStart, tt.mergeEnd, spans)
+			if got != tt.want {
+				t.Errorf("mergeCrossesProtectedSpan(%d, %d, spans) = %v, want %v", tt.mergeStart, tt.mergeEnd, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCoalesceTinyHeuristicChunks_ProtectedSpan(t *testing.T) {
+	// Text with a $$..$$ block that spans rune positions 6-15.
+	text := "AAAAAA$$x+y=z$$BBBBBB"
+	runes := []rune(text)
+	chunks := []Chunk{
+		{Content: "AAAAAA", Seq: 0, Start: 0, End: 6},
+		{Content: "$$x+y=z$$", Seq: 1, Start: 6, End: 15},
+		{Content: "BBBBBB", Seq: 2, Start: 15, End: 21},
+	}
+	// With chunkSize=512, chunk 1 (9 runes) is tiny and would normally
+	// merge backward into chunk 0. But the $$..$$ block starts at 6 and
+	// ends at 15 — merging [0,15) would not cross the span since the span
+	// is fully contained. This should succeed.
+	result := coalesceTinyHeuristicChunks(chunks, runes, 512, nil)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 chunks (tiny formula merged into prev), got %d", len(result))
+	}
+}
+
+func TestCoalesceTinySemanticChunks_ProtectedSpan(t *testing.T) {
+	// Text with a $$..$$ block that spans rune positions 6-15.
+	chunks := []Chunk{
+		{Content: "AAAAAA", Seq: 0, Start: 0, End: 6},
+		{Content: "$$x+y=z$$", Seq: 1, Start: 6, End: 15},
+		{Content: "BBBBBB", Seq: 2, Start: 15, End: 21},
+	}
+	cfg := SplitterConfig{ChunkSize: 512}
+	result := coalesceTinySemanticChunks(chunks, nil, cfg, nil)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 chunks (tiny formula merged into prev), got %d", len(result))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Protected span threading tests
+// ---------------------------------------------------------------------------
+
+func TestAdjustOutOfSpan(t *testing.T) {
+	spans := []span{
+		{start: 10, end: 20},
+		{start: 30, end: 40},
+	}
+	tests := []struct {
+		name string
+		pos  int
+		want int
+	}{
+		{"before all spans", 5, 5},
+		{"at span start", 10, 20},
+		{"inside first span", 15, 20},
+		{"at span end", 20, 20},
+		{"between spans", 25, 25},
+		{"inside second span", 35, 40},
+		{"after all spans", 50, 50},
+		{"empty spans", 15, 15},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := spans
+			if tt.name == "empty spans" {
+				s = nil
+			}
+			if got := adjustOutOfSpan(tt.pos, s); got != tt.want {
+				t.Errorf("adjustOutOfSpan(%d) = %d, want %d", tt.pos, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAdjustSplitOutOfSpans(t *testing.T) {
+	spans := []span{
+		{start: 10, end: 20},
+		{start: 30, end: 40},
+	}
+	tests := []struct {
+		name     string
+		pos      int
+		start    int
+		totalLen int
+		want     int
+	}{
+		{"before spans", 5, 0, 50, 5},
+		{"inside first span pushes to end", 15, 0, 50, 20},
+		{"inside second span pushes to end", 35, 0, 50, 40},
+		{"at span end stays", 20, 0, 50, 20},
+		{"between spans stays", 25, 0, 50, 25},
+		{"empty spans returns pos", 15, 0, 50, 15},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := spans
+			if tt.name == "empty spans returns pos" {
+				s = nil
+			}
+			if got := adjustSplitOutOfSpans(tt.pos, tt.start, tt.totalLen, s); got != tt.want {
+				t.Errorf("adjustSplitOutOfSpans(%d, %d, %d) = %d, want %d", tt.pos, tt.start, tt.totalLen, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInsideAnySpan(t *testing.T) {
+	spans := []span{
+		{start: 10, end: 20},
+		{start: 30, end: 40},
+	}
+	tests := []struct {
+		name string
+		pos  int
+		want bool
+	}{
+		{"before", 5, false},
+		{"at start", 10, true},
+		{"inside", 15, true},
+		{"at end", 20, false},
+		{"between", 25, false},
+		{"inside second", 35, true},
+		{"after all", 50, false},
+		{"empty spans", 15, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := spans
+			if tt.name == "empty spans" {
+				s = nil
+			}
+			if got := insideAnySpan(tt.pos, s); got != tt.want {
+				t.Errorf("insideAnySpan(%d) = %v, want %v", tt.pos, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSnapRuneToSentenceEnd_WithSpans(t *testing.T) {
+	// "Hello $f(x) = x^2.$ World" — period inside formula should not be snap target
+	text := "Hello $f(x) = x^2.$ World"
+	runes := []rune(text)
+	spans := protectedSpansRune(text, protectedSpans(text))
+
+	if len(spans) == 0 {
+		t.Skip("no protected spans found in test text")
+	}
+
+	result := snapRuneToSentenceEnd(runes, 0, len(runes), 5, spans)
+	for _, s := range spans {
+		if result >= s.start && result < s.end {
+			t.Errorf("snapRuneToSentenceEnd landed inside protected span at %d (span %d-%d)", result, s.start, s.end)
+		}
+	}
+}
+
+func TestSnapRuneToSentenceEnd_WithoutSpans(t *testing.T) {
+	// Without spans, snapRuneToSentenceEnd should behave identically to inner
+	runes := []rune("Hello world. This is a test.")
+	resultWithSpans := snapRuneToSentenceEnd(runes, 0, len(runes), 5, nil)
+	resultInner := snapRuneToSentenceEndInner(runes, 0, len(runes), 5)
+	if resultWithSpans != resultInner {
+		t.Errorf("snapRuneToSentenceEnd with nil spans = %d, inner = %d", resultWithSpans, resultInner)
+	}
+}
+
+func TestSplitText_InlineFormulaNotSplit(t *testing.T) {
+	cfg := SplitterConfig{ChunkSize: 80, ChunkOverlap: 20, Separators: DefaultConfig().Separators}
+	text := "这是一段很长的文本用来测试行内公式是否会被切断。我们知道 $f(x) = x^2 + 2x + 1$ 是一个二次函数，它的图像是抛物线。这个函数的顶点在 $(-1, 0)$ 处，开口向上。"
+	chunks := SplitText(text, cfg)
+	for i, c := range chunks {
+		if countUnpairedDollarSigns(c.Content) {
+			t.Errorf("chunk %d has unpaired $ signs: %q", i, c.Content)
+		}
+	}
+}
+
+func TestSplitText_DisplayFormulaNotSplit(t *testing.T) {
+	cfg := SplitterConfig{ChunkSize: 120, ChunkOverlap: 20, Separators: DefaultConfig().Separators}
+	text := "这是一段介绍性文字。\n\n$$\n\\sum_{i=1}^{n} a_i = a_1 + a_2 + \\cdots + a_n\n$$\n\n这是公式之后的解释文字，说明了求和符号的含义和用途。"
+	chunks := SplitText(text, cfg)
+	for i, c := range chunks {
+		if countUnpairedDoubleDollar(c.Content) {
+			t.Errorf("chunk %d has unpaired $$ : %q", i, c.Content)
+		}
+	}
+}
+
+func TestSplitText_CodeBlockNotSplit(t *testing.T) {
+	cfg := SplitterConfig{ChunkSize: 150, ChunkOverlap: 20, Separators: DefaultConfig().Separators}
+	text := "下面是一个Go程序示例：\n\n```go\nfunc main() {\n    fmt.Println(\"Hello, World!\")\n    for i := 0; i < 10; i++ {\n        fmt.Println(i)\n    }\n}\n```\n\n上面的程序展示了基本的Go语法。"
+	chunks := SplitText(text, cfg)
+	for i, c := range chunks {
+		if countUnpairedTripleBacktick(c.Content) {
+			t.Errorf("chunk %d has unpaired ``` : %q", i, c.Content)
+		}
+	}
+}
+
+func TestSplitText_MultipleFormulasNotSplit(t *testing.T) {
+	cfg := SplitterConfig{ChunkSize: 80, ChunkOverlap: 20, Separators: DefaultConfig().Separators}
+	text := "我们有 $a$ 和 $b$ 和 $c$ 三个变量，其中 $a + b = c$ 是基本关系。另外 $d = a^2$ 也是已知的。"
+	chunks := SplitText(text, cfg)
+	for i, c := range chunks {
+		if countUnpairedDollarSigns(c.Content) {
+			t.Errorf("chunk %d has unpaired $ signs: %q", i, c.Content)
+		}
+	}
+}
+
+func TestSplitText_FormulaWithPeriodNotSplit(t *testing.T) {
+	cfg := SplitterConfig{ChunkSize: 80, ChunkOverlap: 20, Separators: DefaultConfig().Separators}
+	text := "根据定义 $f(x) = x^2 + 2x + 1.$ 这个函数是二次的。然后我们考虑 $g(x) = \\sin(x).$ 它是周期函数。"
+	chunks := SplitText(text, cfg)
+	for i, c := range chunks {
+		if countUnpairedDollarSigns(c.Content) {
+			t.Errorf("chunk %d has unpaired $ signs: %q", i, c.Content)
+		}
+	}
+}
+
+func TestSplitText_MixedContentNotSplit(t *testing.T) {
+	cfg := SplitterConfig{ChunkSize: 200, ChunkOverlap: 30, Separators: DefaultConfig().Separators}
+	text := "## 数学基础\n\n我们定义函数 $f(x) = x^2$ 如下。\n\n$$\n\\int_0^1 f(x) dx = \\frac{1}{3}\n$$\n\n代码实现：\n\n```python\ndef f(x):\n    return x ** 2\n\nresult = integral(f, 0, 1)\n```\n\n以上是完整的示例。"
+	chunks := SplitText(text, cfg)
+	for i, c := range chunks {
+		if countUnpairedDollarSigns(c.Content) {
+			t.Errorf("chunk %d has unpaired $ signs: %q", i, c.Content)
+		}
+		if countUnpairedTripleBacktick(c.Content) {
+			t.Errorf("chunk %d has unpaired ``` : %q", i, c.Content)
+		}
+	}
+}
+
+// Helpers for checking paired delimiters in chunk content.
+
+// countUnpairedDollarSigns returns true if single-dollar signs (not $$) are unpaired.
+func countUnpairedDollarSigns(s string) bool {
+	count := 0
+	inDouble := false
+	for i := 0; i < len(s); i++ {
+		if i+1 < len(s) && s[i] == '$' && s[i+1] == '$' {
+			inDouble = !inDouble
+			i++ // skip second $
+			continue
+		}
+		if s[i] == '$' && !inDouble {
+			count++
+		}
+	}
+	return count%2 != 0
+}
+
+// countUnpairedDoubleDollar returns true if $$ delimiters are unpaired.
+func countUnpairedDoubleDollar(s string) bool {
+	count := 0
+	for i := 0; i < len(s)-1; i++ {
+		if s[i] == '$' && s[i+1] == '$' {
+			count++
+			i++ // skip second $
+		}
+	}
+	return count%2 != 0
+}
+
+// countUnpairedTripleBacktick returns true if ``` delimiters are unpaired.
+func countUnpairedTripleBacktick(s string) bool {
+	count := 0
+	for i := 0; i <= len(s)-3; i++ {
+		if s[i] == '`' && s[i+1] == '`' && s[i+2] == '`' {
+			count++
+			i += 2 // skip remaining backticks
+		}
+	}
+	return count%2 != 0
 }

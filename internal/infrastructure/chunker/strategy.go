@@ -16,14 +16,12 @@ import (
 
 // Strategy values for SplitterConfig.Strategy.
 const (
-	StrategyAuto = "auto"
-	// StrategySemantic is a deprecated public-API alias for structure-aware
-	// chunking with semantic refinement when an embedder is available.
-	StrategySemantic  = "semantic"
-	StrategyHeading   = "heading"
-	StrategyHeuristic = "heuristic"
-	StrategyRecursive = "recursive"
-	StrategyLegacy    = "legacy"
+	StrategyAuto           = "auto"
+	StrategyStructureAware = "structure_aware"
+	StrategyHeading        = "heading"
+	StrategyHeuristic      = "heuristic"
+	StrategyRecursive      = "recursive"
+	StrategyLegacy         = "legacy"
 )
 
 // Split chunks text using the strategy configured in cfg. When cfg.Strategy
@@ -50,16 +48,6 @@ func splitWithOptionalSemantic(ctx context.Context, text string, cfg SplitterCon
 	}
 	cfg = ensureDefaults(cfg)
 	chain, profile := resolveChainWithProfile(text, cfg)
-	// When the profiler detects an academic document and recommends a larger
-	// ChunkSize, use it only if the user hasn't explicitly overridden the
-	// default (i.e. the strategy is "auto" and ChunkSize is still at the
-	// package default). This improves quality for dense academic PDFs while
-	// respecting intentional configuration.
-	if profile != nil && profile.IsAcademic && profile.RecommendedChunkSize > 0 &&
-		cfg.Strategy == StrategyAuto &&
-		cfg.ChunkSize == DefaultChunkSize {
-		cfg.ChunkSize = profile.RecommendedChunkSize
-	}
 	totalChars := len([]rune(text))
 
 	var lastOut []Chunk
@@ -244,10 +232,6 @@ func resolveChainWithProfile(text string, cfg SplitterConfig) ([]StrategyTier, *
 		return []StrategyTier{TierHeading, TierLegacy}, nil
 	case StrategyHeuristic:
 		return []StrategyTier{TierHeuristic, TierLegacy}, nil
-	case StrategySemantic:
-		// Backward compatibility for stored configs: standalone semantic is
-		// now structure-aware semantic refinement.
-		return []StrategyTier{TierHeuristic, TierLegacy}, nil
 	case StrategyRecursive:
 		// "recursive" is a public-API alias for "legacy": both invoke
 		// SplitText. Kept for backwards compatibility with stored configs.
@@ -256,7 +240,7 @@ func resolveChainWithProfile(text string, cfg SplitterConfig) ([]StrategyTier, *
 		// Empty == legacy preserves backwards compatibility with stored
 		// ChunkingConfig rows that pre-date the Strategy field.
 		return []StrategyTier{TierLegacy}, nil
-	case StrategyAuto:
+	case StrategyAuto, StrategyStructureAware:
 		fallthrough
 	default:
 		profile := ProfileDocument(text)

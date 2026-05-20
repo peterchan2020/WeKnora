@@ -28,7 +28,7 @@ func TestCoalesceTinySemanticChunks_DoesNotMutateInput(t *testing.T) {
 	}
 	originalNext := chunks[2]
 
-	_ = coalesceTinySemanticChunks(chunks, nil, SplitterConfig{ChunkSize: 59})
+	_ = coalesceTinySemanticChunks(chunks, nil, SplitterConfig{ChunkSize: 59}, nil)
 
 	if chunks[2].Content != originalNext.Content || chunks[2].Seq != originalNext.Seq || chunks[2].Start != originalNext.Start || chunks[2].End != originalNext.End {
 		t.Fatalf("coalescing should not mutate input slice: got Content=%q Seq=%d Start=%d End=%d want Content=%q Seq=%d Start=%d End=%d",

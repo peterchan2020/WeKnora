@@ -330,11 +330,14 @@ const languageOptions = computed(() => [
 const separatorOptions = computed(() => [
   { label: t('knowledgeEditor.chunking.separators.doubleNewline'), value: '\n\n' },
   { label: t('knowledgeEditor.chunking.separators.singleNewline'), value: '\n' },
+  { label: t('knowledgeEditor.chunking.separators.periodEn'), value: '. ' },
+  { label: t('knowledgeEditor.chunking.separators.exclamationEn'), value: '! ' },
+  { label: t('knowledgeEditor.chunking.separators.questionEn'), value: '? ' },
   { label: t('knowledgeEditor.chunking.separators.periodCn'), value: '。' },
   { label: t('knowledgeEditor.chunking.separators.exclamationCn'), value: '！' },
   { label: t('knowledgeEditor.chunking.separators.questionCn'), value: '？' },
   { label: t('knowledgeEditor.chunking.separators.semicolonCn'), value: '；' },
-  { label: t('knowledgeEditor.chunking.separators.semicolonEn'), value: ';' },
+  { label: t('knowledgeEditor.chunking.separators.semicolonEn'), value: '; ' },
   { label: t('knowledgeEditor.chunking.separators.space'), value: ' ' }
 ])
 

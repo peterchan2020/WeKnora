@@ -190,7 +190,7 @@ func buildSplitterConfig(kb *types.KnowledgeBase) chunker.SplitterConfig {
 		chunkCfg.ChunkOverlap = chunker.DefaultChunkOverlap
 	}
 	if len(chunkCfg.Separators) == 0 {
-		chunkCfg.Separators = []string{"\n\n", "\n", "。"}
+		chunkCfg.Separators = []string{"\n\n", "\n", ". ", "! ", "? ", "。", "！", "？", "; ", "；"}
 	}
 	return chunkCfg
 }

@@ -110,7 +110,7 @@ func DefaultConfig() SplitterConfig {
 	return SplitterConfig{
 		ChunkSize:    DefaultChunkSize,
 		ChunkOverlap: DefaultChunkOverlap,
-		Separators:   []string{"\n\n", "\n", "。"},
+		Separators:   []string{"\n\n", "\n", ". ", "! ", "? ", "。", "！", "？", "; ", "；"},
 	}
 }
 
@@ -203,6 +203,7 @@ func protectedSpans(text string) []span {
 type splitUnit struct {
 	text       string
 	start, end int
+	isSentence bool // true = produced by separator/sentence-level splitting
 }
 
 // splitBySeparators splits text by separators in priority order, recursively
@@ -214,18 +215,58 @@ type splitUnit struct {
 //
 // chunkSize == 0 disables the recursion guard; callers that don't care
 // about size budget (e.g. a final mergeUnits-style pass) pass 0.
-func splitBySeparators(text string, separators []string, chunkSize int) []string {
+var sentenceLevelSeparators = map[string]bool{
+	". ": true, "! ": true, "? ": true,
+	"。": true, "！": true, "？": true,
+}
+
+func isSentenceLevelSeparator(sep string) bool {
+	return sentenceLevelSeparators[sep]
+}
+
+func dropSentenceLevelSeparators(seps []string) []string {
+	out := make([]string, 0, len(seps))
+	for _, sep := range seps {
+		if !isSentenceLevelSeparator(sep) {
+			out = append(out, sep)
+		}
+	}
+	return out
+}
+
+func splitBySeparators(text string, separators []string, chunkSize int) []splitUnit {
+	mkUnit := func(s string) splitUnit {
+		return splitUnit{text: s, isSentence: true}
+	}
 	if text == "" || len(separators) == 0 {
-		return []string{text}
+		return []splitUnit{mkUnit(text)}
 	}
 	if chunkSize > 0 && runeLen(text) <= chunkSize {
-		return []string{text}
+		return []splitUnit{mkUnit(text)}
 	}
 
 	for i, sep := range separators {
 		if sep == "" {
 			continue
 		}
+
+		if isSentenceLevelSeparator(sep) {
+			sentUnits := splitBySentencesPunkt(text)
+			if len(sentUnits) > 1 {
+				remaining := dropSentenceLevelSeparators(separators[i+1:])
+				var out []splitUnit
+				for _, sent := range sentUnits {
+					if chunkSize > 0 && runeLen(sent.text) > chunkSize && len(remaining) > 0 {
+						out = append(out, splitBySeparators(sent.text, remaining, chunkSize)...)
+					} else {
+						out = append(out, sent)
+					}
+				}
+				return out
+			}
+			continue
+		}
+
 		re := regexp.MustCompile("(" + regexp.QuoteMeta(sep) + ")")
 		splits := re.Split(text, -1)
 		matches := re.FindAllString(text, -1)
@@ -248,18 +289,18 @@ func splitBySeparators(text string, separators []string, chunkSize int) []string
 
 		// Recursively split any piece that is still too large with the
 		// remaining (lower-priority) separators.
-		var out []string
+		var out []splitUnit
 		remaining := separators[i+1:]
 		for _, p := range pieces {
 			if chunkSize > 0 && runeLen(p) > chunkSize && len(remaining) > 0 {
 				out = append(out, splitBySeparators(p, remaining, chunkSize)...)
 			} else {
-				out = append(out, p)
+				out = append(out, mkUnit(p))
 			}
 		}
 		return out
 	}
-	return []string{text}
+	return []splitUnit{mkUnit(text)}
 }
 
 // runeLen returns the number of runes in s.
@@ -316,11 +357,12 @@ func buildUnitsWithProtection(text string, protected []span, separators []string
 			parts := splitBySeparators(pre, separators, chunkSize)
 			runeOffset := runePos
 			for _, part := range parts {
-				partRuneLen := runeLen(part)
+				partRuneLen := runeLen(part.text)
 				units = append(units, splitUnit{
-					text:  part,
-					start: runeOffset,
-					end:   runeOffset + partRuneLen,
+					text:       part.text,
+					start:      runeOffset,
+					end:        runeOffset + partRuneLen,
+					isSentence: part.isSentence,
 				})
 				runeOffset += partRuneLen
 			}
@@ -375,11 +417,12 @@ func buildUnitsWithProtection(text string, protected []span, separators []string
 		parts := splitBySeparators(remaining, separators, chunkSize)
 		runeOffset := runePos
 		for _, part := range parts {
-			partRuneLen := runeLen(part)
+			partRuneLen := runeLen(part.text)
 			units = append(units, splitUnit{
-				text:  part,
-				start: runeOffset,
-				end:   runeOffset + partRuneLen,
+				text:       part.text,
+				start:      runeOffset,
+				end:        runeOffset + partRuneLen,
+				isSentence: part.isSentence,
 			})
 			runeOffset += partRuneLen
 		}

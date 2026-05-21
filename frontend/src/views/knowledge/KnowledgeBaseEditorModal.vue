@@ -506,7 +506,7 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
       // 80 ≈ 15% of chunkSize — community-recommended sweet spot.
       // Aligned with chunker.DefaultChunkOverlap on the backend.
       chunkOverlap: 80,
-      separators: ['\n\n', '\n', '。', '！', '？', ';', '；'],
+      separators: ['\n\n', '\n', '. ', '! ', '? ', '。', '！', '？', '; ', '；'],
       parserEngineRules: undefined as any,
       enableParentChild: true,
       parentChunkSize: 4096,
@@ -1626,4 +1626,3 @@ watch(
   }
 }
 </style>
-

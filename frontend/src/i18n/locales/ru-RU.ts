@@ -2282,11 +2282,14 @@ export default {
       separators: {
         doubleNewline: 'Двойной перевод строки (\\n\\n)',
         singleNewline: 'Одинарный перевод строки (\\n)',
+        periodEn: 'Английская точка (. )',
+        exclamationEn: 'Английский восклицательный знак (! )',
+        questionEn: 'Английский вопросительный знак (? )',
         periodCn: 'Китайская точка (。)',
         exclamationCn: 'Восклицательный знак (！)',
         questionCn: 'Вопросительный знак (？)',
         semicolonCn: 'Китайская точка с запятой (；)',
-        semicolonEn: 'Точка с запятой (;)',
+        semicolonEn: 'Английская точка с запятой (; )',
         space: 'Пробел ( )'
       },
       parentChildLabel: 'Родительско-дочернее разбиение',

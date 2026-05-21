@@ -2037,11 +2037,14 @@ export default {
 )',
         singleNewline: 'Single newline (\
 )',
+        periodEn: 'Period (. )',
+        exclamationEn: 'Exclamation mark (! )',
+        questionEn: 'Question mark (? )',
         periodCn: 'Chinese period (。)',
         exclamationCn: 'Exclamation mark (！)',
         questionCn: 'Question mark (？)',
         semicolonCn: 'Chinese semicolon (；)',
-        semicolonEn: 'Semicolon (;)',
+        semicolonEn: 'Semicolon (; )',
         space: 'Space ( )'
       },
       parentChildLabel: 'Parent-Child Chunking',

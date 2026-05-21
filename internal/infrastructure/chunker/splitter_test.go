@@ -331,6 +331,78 @@ func TestSplitBySeparators(t *testing.T) {
 	}
 }
 
+func TestSplitBySentencesPunkt_AbbreviationNotSplit(t *testing.T) {
+	text := "Dr. Smith published the result in Fig. 3 of the report. " +
+		"This was confirmed by et al. in their follow-up study."
+
+	units := splitBySentencesPunkt(text)
+	if len(units) != 2 {
+		t.Fatalf("got %d sentences, want 2: %#v", len(units), units)
+	}
+	if strings.HasPrefix(strings.TrimSpace(units[0].text), "Smith") ||
+		strings.HasPrefix(strings.TrimSpace(units[0].text), "3 of") {
+		t.Fatalf("punkt split after an abbreviation: %#v", units)
+	}
+	if got := units[0].text + units[1].text; got != text {
+		t.Fatalf("sentence units do not preserve source text:\n got: %q\nwant: %q", got, text)
+	}
+}
+
+func TestSplitBySeparators_PunktChineseSentenceBoundary(t *testing.T) {
+	text := "第一句包含中文。第二句包含 English Fig. 3。最后一句！"
+
+	units := splitBySeparators(text, []string{"。", "！", "？"}, 0)
+	if len(units) < 2 {
+		t.Fatalf("got %d sentence units, want punkt to split mixed CJK text: %#v", len(units), units)
+	}
+	var combined strings.Builder
+	for _, u := range units {
+		combined.WriteString(u.text)
+	}
+	if got := combined.String(); got != text {
+		t.Fatalf("sentence units do not preserve source text:\n got: %q\nwant: %q", got, text)
+	}
+	for i, u := range units {
+		if !u.isSentence {
+			t.Fatalf("unit[%d] isSentence=false, want true", i)
+		}
+	}
+}
+
+func TestSplitText_DefaultSeparatorsIncludeEnglishSentence(t *testing.T) {
+	cfg := DefaultConfig()
+	for _, sep := range []string{". ", "! ", "? "} {
+		found := false
+		for _, got := range cfg.Separators {
+			if got == sep {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("DefaultConfig().Separators missing %q: %v", sep, cfg.Separators)
+		}
+	}
+}
+
+func TestBuildUnitsWithProtection_ProtectedSpanNotSentence(t *testing.T) {
+	text := "Before.\n\n```\nfmt.Println(\"hello\")\n```\n\nAfter."
+	units := buildUnitsWithProtection(text, protectedSpans(text), DefaultConfig().Separators, 512)
+
+	foundProtected := false
+	for _, u := range units {
+		if strings.Contains(u.text, "fmt.Println") {
+			foundProtected = true
+			if u.isSentence {
+				t.Fatalf("protected code block unit isSentence=true: %#v", u)
+			}
+		}
+	}
+	if !foundProtected {
+		t.Fatal("expected to find protected code block unit")
+	}
+}
+
 func TestExtractImageRefs(t *testing.T) {
 	text := "hello ![alt1](url1) world ![alt2](url2) end"
 	refs := ExtractImageRefs(text)

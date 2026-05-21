@@ -36,6 +36,7 @@ require (
 	github.com/milvus-io/milvus/client/v2 v2.6.4
 	github.com/minio/minio-go/v7 v7.1.0
 	github.com/neo4j/neo4j-go-driver/v6 v6.0.0
+	github.com/neurosnap/sentences v1.1.2
 	github.com/ollama/ollama v0.23.2
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
 	github.com/panjf2000/ants/v2 v2.12.0
@@ -224,6 +225,7 @@ require (
 	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
+	github.com/mattn/go-pointer v0.0.1 // indirect
 	github.com/mattn/go-sqlite3 v1.14.24 // indirect
 	github.com/milvus-io/milvus-proto/go-api/v2 v2.6.15 // indirect
 	github.com/milvus-io/milvus/pkg/v2 v2.6.7-0.20251201120310-af64f2acba38 // indirect

@@ -3535,6 +3535,8 @@ export default {
       searchKbFailed: 'Ошибка поиска по базе знаний',
       webSearch: 'Веб-поиск',
       webSearchFailed: 'Ошибка веб-поиска',
+      grepSearch: 'Поиск по ключевым словам',
+      grepSearchFailed: 'Ошибка поиска по ключевым словам',
       getDocInfo: 'Получение информации о документе',
       getDocInfoFailed: 'Ошибка получения информации о документе',
       thinkingDone: 'Размышление завершено',
@@ -4401,6 +4403,7 @@ export default {
   tenantMember: {
     title: 'Участники',
     sectionDescription: 'Приглашайте коллег в тенант и управляйте их ролями. Добавлять и удалять участников может только Владелец.',
+    learnRbacGuide: 'Подробнее о RBAC',
     totalCount: 'Участников: {n}',
     listTitle: 'Участники пространства',
     filterMatched: 'найдено: {n}',

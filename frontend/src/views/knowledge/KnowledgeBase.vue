@@ -532,6 +532,8 @@ const loadKnowledgeFiles = (kbIdValue: string): Promise<void> => {
   );
 };
 
+const isCurrentKb = (targetKbId: string) => targetKbId === kbId.value;
+
 const loadTags = async (kbIdValue: string, reset = false) => {
   if (!kbIdValue) {
     tagList.value = [];
@@ -558,6 +560,8 @@ const loadTags = async (kbIdValue: string, reset = false) => {
       page_size: TAG_PAGE_SIZE,
       keyword: tagSearchQuery.value || undefined,
     });
+    if (!isCurrentKb(kbIdValue)) return;
+
     const pageData = (res?.data || {}) as {
       data?: any[];
       total?: number;
@@ -579,10 +583,13 @@ const loadTags = async (kbIdValue: string, reset = false) => {
       tagPage.value = currentPage + 1;
     }
   } catch (error) {
+    if (!isCurrentKb(kbIdValue)) return;
     console.error('Failed to load tags', error);
   } finally {
-    tagLoading.value = false;
-    tagLoadingMore.value = false;
+    if (isCurrentKb(kbIdValue)) {
+      tagLoading.value = false;
+      tagLoadingMore.value = false;
+    }
   }
 };
 
@@ -751,11 +758,15 @@ const handleKnowledgeTagChange = async (knowledgeId: string, tagValue: string) =
 const loadKnowledgeBaseInfo = async (targetKbId: string) => {
   if (!targetKbId) {
     kbInfo.value = null;
+    cardList.value = [];
+    total.value = 0;
     return;
   }
   kbLoading.value = true;
   try {
     const res: any = await getKnowledgeBaseById(targetKbId);
+    if (!isCurrentKb(targetKbId)) return;
+
     kbInfo.value = res?.data || null;
     selectedTagId.value = '';
     // 重置store中的标签选择状态，避免上传文档时自动带上之前选择的标签
@@ -769,10 +780,16 @@ const loadKnowledgeBaseInfo = async (targetKbId: string) => {
     }
     loadTags(targetKbId, true);
   } catch (error) {
+    if (!isCurrentKb(targetKbId)) return;
+
     console.error('Failed to load knowledge base info:', error);
     kbInfo.value = null;
+    cardList.value = [];
+    total.value = 0;
   } finally {
-    kbLoading.value = false;
+    if (isCurrentKb(targetKbId)) {
+      kbLoading.value = false;
+    }
   }
 };
 
@@ -818,6 +835,10 @@ watch(activeKbTab, (tab) => {
 
 watch(() => kbId.value, (newKbId, oldKbId) => {
   if (newKbId && newKbId !== oldKbId) {
+    cardList.value = [];
+    total.value = 0;
+    docListLoading.value = true;
+    resetPage();
     tagSearchQuery.value = '';
     tagPage.value = 1;
     // 重置标签选择状态，避免在不同知识库间保持标签选择
@@ -1320,7 +1341,8 @@ const handleDocumentUpload = async (event: Event) => {
   const files = input?.files;
   if (!files || files.length === 0) return;
 
-  if (!kbId.value) {
+  const targetKbId = kbId.value;
+  if (!targetKbId) {
     MessagePlugin.error(t('error.missingKbId'));
     resetUploadInput();
     return;
@@ -1396,7 +1418,7 @@ const handleDocumentUpload = async (event: Event) => {
 
   for (const file of validFiles) {
     try {
-      const responseData: any = await uploadKnowledgeFile(kbId.value, { file, tag_id: tagIdToUpload });
+      const responseData: any = await uploadKnowledgeFile(targetKbId, { file, tag_id: tagIdToUpload });
       const isSuccess = responseData?.success || responseData?.code === 200 || responseData?.status === 'success' || (!responseData?.error && responseData);
       if (isSuccess) {
         successCount++;
@@ -1430,7 +1452,7 @@ const handleDocumentUpload = async (event: Event) => {
   // 显示上传结果
   if (successCount > 0) {
     window.dispatchEvent(new CustomEvent('knowledgeFileUploaded', {
-      detail: { kbId: kbId.value }
+      detail: { kbId: targetKbId }
     }));
   }
 
@@ -1457,7 +1479,8 @@ const handleFolderUpload = async (event: Event) => {
   const files = input?.files;
   if (!files || files.length === 0) return;
 
-  if (!kbId.value) {
+  const targetKbId = kbId.value;
+  if (!targetKbId) {
     MessagePlugin.error(t('error.missingKbId'));
     if (input) input.value = '';
     return;
@@ -1545,7 +1568,7 @@ const handleFolderUpload = async (event: Event) => {
     }
 
     try {
-      await uploadKnowledgeFile(kbId.value, { file, fileName, tag_id: tagIdToUpload });
+      await uploadKnowledgeFile(targetKbId, { file, fileName, tag_id: tagIdToUpload });
       successCount++;
     } catch (error: any) {
       failCount++;
@@ -1554,7 +1577,7 @@ const handleFolderUpload = async (event: Event) => {
 
   if (successCount > 0) {
     window.dispatchEvent(new CustomEvent('knowledgeFileUploaded', {
-      detail: { kbId: kbId.value }
+      detail: { kbId: targetKbId }
     }));
   }
 
@@ -1610,7 +1633,8 @@ const handleURLImportConfirm = async () => {
     return;
   }
 
-  if (!kbId.value) {
+  const targetKbId = kbId.value;
+  if (!targetKbId) {
     MessagePlugin.error(t('error.missingKbId'));
     return;
   }
@@ -1619,9 +1643,9 @@ const handleURLImportConfirm = async () => {
   try {
     // 获取当前选中的分类ID
     const tagIdToUpload = selectedTagId.value !== '__untagged__' ? selectedTagId.value : undefined;
-    const responseData: any = await createKnowledgeFromURL(kbId.value, { url, tag_id: tagIdToUpload });
+    const responseData: any = await createKnowledgeFromURL(targetKbId, { url, tag_id: tagIdToUpload });
     window.dispatchEvent(new CustomEvent('knowledgeFileUploaded', {
-      detail: { kbId: kbId.value }
+      detail: { kbId: targetKbId }
     }));
     const isSuccess = responseData?.success || responseData?.code === 200 || responseData?.status === 'success' || (!responseData?.error && responseData);
     if (isSuccess) {
@@ -1731,7 +1755,10 @@ const rebuildConfirm = async () => {
 
 const handleScroll = () => {
   if (isFAQ.value) return;
+  if (docListLoading.value) return;
   if (scrollLoading) return;
+  const currentKbId = kbId.value;
+  if (!currentKbId) return;
   const element = knowledgeScroll.value;
   if (element) {
     let pageNum = Math.ceil(total.value / pageSize)
@@ -1740,8 +1767,10 @@ const handleScroll = () => {
       if (cardList.value.length < total.value && page < pageNum) {
         page++;
         scrollLoading = true;
-        getKnowled({ page, page_size: pageSize, ...filterParams.value }).finally(() => {
-          scrollLoading = false;
+        getKnowled({ page, page_size: pageSize, ...filterParams.value }, currentKbId).finally(() => {
+          if (isCurrentKb(currentKbId)) {
+            scrollLoading = false;
+          }
         });
       }
     }

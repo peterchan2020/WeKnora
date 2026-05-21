@@ -3960,6 +3960,8 @@ export default {
       searchKbFailed: '지식베이스 검색 실패',
       webSearch: '웹 검색',
       webSearchFailed: '웹 검색 실패',
+      grepSearch: '키워드 검색',
+      grepSearchFailed: '키워드 검색 실패',
       getDocInfo: '문서 정보 조회',
       getDocInfoFailed: '문서 정보 조회 실패',
       thinkingDone: '사고 완료',
@@ -4504,6 +4506,7 @@ export default {
   tenantMember: {
     title: "멤버 관리",
     sectionDescription: "테넌트에 동료를 초대하고 역할을 관리합니다. 소유자만 멤버를 추가하거나 제거할 수 있습니다.",
+    learnRbacGuide: "RBAC 알아보기",
     totalCount: "총 {n}명",
     listTitle: "워크스페이스 멤버",
     filterMatched: "{n}명 일치",

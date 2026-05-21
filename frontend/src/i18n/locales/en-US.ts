@@ -3903,6 +3903,8 @@ export default {
       searchKbFailed: 'Knowledge base search failed',
       webSearch: 'Web search',
       webSearchFailed: 'Web search failed',
+      grepSearch: 'Keyword search',
+      grepSearchFailed: 'Keyword search failed',
       getDocInfo: 'Getting document info',
       getDocInfoFailed: 'Failed to get document info',
       thinkingDone: 'Thinking complete',
@@ -4450,6 +4452,7 @@ export default {
   tenantMember: {
     title: 'Members',
     sectionDescription: 'Invite teammates to the tenant and manage their roles. Only Owner can add or remove members.',
+    learnRbacGuide: 'Learn about RBAC',
     totalCount: '{n} members',
     listTitle: 'Workspace members',
     filterMatched: '{n} matched',

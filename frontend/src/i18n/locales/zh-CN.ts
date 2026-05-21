@@ -3737,7 +3737,7 @@ export default {
   tools: {
     multiKbSearch: "跨库搜索",
     knowledgeSearch: "知识库搜索",
-    grepChunks: "文本模式搜索",
+    grepChunks: "搜索关键词",
     getChunkDetail: "获取片段详情",
     listKnowledgeChunks: "查看知识分块",
     listKnowledgeBases: "列出知识库",
@@ -3838,7 +3838,7 @@ export default {
     },
     tools: {
       searchKnowledge: "知识库检索",
-      grepChunks: "文本模式搜索",
+      grepChunks: "搜索关键词",
       webSearch: "网络搜索",
       webFetch: "网页抓取",
       getDocumentInfo: "获取文档信息",
@@ -3898,6 +3898,8 @@ export default {
       searchKbFailed: "检索知识库失败",
       webSearch: "网络搜索",
       webSearchFailed: "网络搜索失败",
+      grepSearch: "搜索关键词",
+      grepSearchFailed: "搜索关键词失败",
       getDocInfo: "获取文档信息",
       getDocInfoFailed: "获取文档信息失败",
       thinkingDone: "完成思考",
@@ -4442,6 +4444,7 @@ export default {
   tenantMember: {
     title: "成员管理",
     sectionDescription: "邀请伙伴加入当前空间并分配角色。只有 Owner 可以新增或移除成员。",
+    learnRbacGuide: "了解 RBAC",
     totalCount: "共 {n} 位成员",
     listTitle: "空间成员",
     filterMatched: "筛选出 {n} 位",

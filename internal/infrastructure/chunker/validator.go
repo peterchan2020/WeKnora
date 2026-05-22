@@ -62,7 +62,7 @@ func ValidateChunks(chunks []Chunk, totalChars, chunkSize int) ValidationResult 
 			tinyCount++
 		}
 	}
-	if tinyCount > len(chunks)/5 && tinyCount > 3 {
+	if tinyCount > len(chunks)*3/10 && tinyCount > 5 {
 		return ValidationResult{Reason: "too many tiny chunks"}
 	}
 

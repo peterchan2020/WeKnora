@@ -821,8 +821,20 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 			}
 			// chunk.EmbeddingContent prepends ContextHeader (heading breadcrumb)
 			// when the chunker populated it during Tier-1 splitting; falls back
-			// to plain Content otherwise. Title prefix sits outermost.
-			indexContent := titlePrefix + chunk.EmbeddingContent()
+			// to plain Content otherwise.
+			//
+			// Skip title prefix when the chunk already has a ContextHeader —
+			// the heading breadcrumb + title is already embedded in the
+			// ContextHeader by the chunker. Adding the title again on top of
+			// ContextHeader creates a triple-stacked embedding input
+			// (title + heading + content) where the identical document title
+			// dominates the vector space, causing all chunks from the same
+			// document to cluster together and reducing retrieval
+			// discrimination (lower Precision and NDCG).
+			indexContent := chunk.EmbeddingContent()
+			if chunk.ContextHeader == "" && titlePrefix != "" {
+				indexContent = titlePrefix + indexContent
+			}
 			indexInfoList = append(indexInfoList, &types.IndexInfo{
 				Content:         indexContent,
 				SourceID:        chunk.ID,
@@ -1921,6 +1933,9 @@ func (s *knowledgeService) updateChunkVector(ctx context.Context, kbID string, c
 	// content as the initial indexing path (titlePrefix + EmbeddingContent).
 	// Without this, updated chunks lose their title and ContextHeader context,
 	// causing retrieval quality to silently degrade over time.
+	//
+	// Skip title prefix when the chunk already has a ContextHeader — same
+	// logic as processChunks to avoid triple-stacked embedding input.
 	titlePrefix := ""
 	if len(chunks) > 0 && chunks[0].KnowledgeID != "" {
 		tenantID := types.MustTenantIDFromContext(ctx)
@@ -1941,8 +1956,12 @@ func (s *knowledgeService) updateChunkVector(ctx context.Context, kbID string, c
 			logger.Warnf(ctx, "Knowledge base ID mismatch: %s != %s", chunk.KnowledgeBaseID, kbID)
 			continue
 		}
+		indexContent := chunk.EmbeddingContent()
+		if chunk.ContextHeader == "" && titlePrefix != "" {
+			indexContent = titlePrefix + indexContent
+		}
 		indexInfo = append(indexInfo, &types.IndexInfo{
-			Content:         titlePrefix + chunk.EmbeddingContent(),
+			Content:         indexContent,
 			SourceID:        chunk.ID,
 			SourceType:      types.ChunkSourceType,
 			ChunkID:         chunk.ID,

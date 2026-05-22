@@ -850,7 +850,7 @@ func coalesceOrphanHeadings(chunks []Chunk, chunkSize int, protSpans []span) []C
 		return chunks
 	}
 
-	verySmallThreshold := chunkSize / 6
+	verySmallThreshold := chunkSize / 10
 
 	out := make([]Chunk, 0, len(chunks))
 	// pendingHeadings accumulates consecutive heading-only, near-empty, or

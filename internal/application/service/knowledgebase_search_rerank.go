@@ -59,9 +59,10 @@ func (s *knowledgeBaseService) rerankSearchCandidates(
 	}
 
 	// Rerank score blending weights (same formula as chat pipeline).
-	const rerankWeight = 0.6
+	// Weights sum to 1.0 with no additive bias so the blended score stays
+	// in the same [0, 1] range as the rerank model's raw output.
+	const rerankWeight = 0.7
 	const baseScoreWeight = 0.3
-	const scoreBias = 0.1
 	// Fallback threshold: keep top-1 if its relevance exceeds this value.
 	const fallbackMinRelevance = 0.15
 
@@ -76,7 +77,7 @@ func (s *knowledgeBaseService) rerankSearchCandidates(
 			continue
 		}
 		c := rerankable[rr.Index]
-		blended := rerankWeight*rr.RelevanceScore + baseScoreWeight*c.Score + scoreBias
+		blended := rerankWeight*rr.RelevanceScore + baseScoreWeight*c.Score
 		if blended > 1 {
 			blended = 1
 		}
@@ -100,7 +101,7 @@ func (s *knowledgeBaseService) rerankSearchCandidates(
 		rr := rerankResp[0]
 		if rr.Index < len(rerankable) {
 			c := rerankable[rr.Index]
-			blended := rerankWeight*rr.RelevanceScore + baseScoreWeight*c.Score + scoreBias
+			blended := rerankWeight*rr.RelevanceScore + baseScoreWeight*c.Score
 			if blended > 1 {
 				blended = 1
 			}

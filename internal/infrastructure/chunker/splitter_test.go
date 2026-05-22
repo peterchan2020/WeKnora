@@ -1094,7 +1094,9 @@ func TestCoalesceOrphanHeadings_PureHeadingInContextHeader(t *testing.T) {
 		{Content: "## 3.2 Methods\n", ContextHeader: "", Seq: 0},
 		{Content: strings.Repeat("x", 300), ContextHeader: "", Seq: 1},
 	}
-	result := coalesceOrphanHeadings(chunks, 512, nil)
+	// chunkSize=300 forces budget overflow (heading 15 + "\n\n" + 300 = 317 > 300),
+	// so the heading must be promoted to ContextHeader rather than merged into Content.
+	result := coalesceOrphanHeadings(chunks, 300, nil)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 chunk after coalescing, got %d", len(result))
 	}
@@ -1112,8 +1114,8 @@ func TestCoalesceOrphanHeadings_VerySmallThreshold(t *testing.T) {
 }
 
 func TestSplitText_OverlapIncreased(t *testing.T) {
-	if DefaultChunkOverlap != 256 {
-		t.Errorf("DefaultChunkOverlap should be 256, got %d", DefaultChunkOverlap)
+	if DefaultChunkOverlap != 80 {
+		t.Errorf("DefaultChunkOverlap should be 80, got %d", DefaultChunkOverlap)
 	}
 }
 

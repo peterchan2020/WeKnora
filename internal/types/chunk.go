@@ -178,18 +178,68 @@ type Chunk struct {
 
 // EmbeddingContent returns the chunk content with ContextHeader prepended
 // when set. Use this where the embedding model needs section context that
-// isn't part of the literal Content. Surrounding whitespace on Content is
-// trimmed so leading/trailing newlines from boundary slicing don't dilute
-// the embedded vector.
+// isn't part of the literal Content. The body is normalized for embedding:
+// surrounding whitespace is trimmed, and runs of 3+ consecutive newlines are
+// collapsed to a single paragraph break (2 newlines). This improves embedding
+// semantic density by reducing token waste on non-semantic whitespace that
+// is common in PDF-extracted documents.
 func (c *Chunk) EmbeddingContent() string {
 	if c == nil {
 		return ""
 	}
-	body := strings.TrimSpace(c.Content)
+	body := normalizeEmbeddingBody(c.Content)
 	if c.ContextHeader == "" {
 		return body
 	}
 	return c.ContextHeader + "\n\n" + body
+}
+
+// normalizeEmbeddingBody trims surrounding whitespace and collapses excessive
+// blank-line runs (3+ newlines → 2) so the embedding model receives a denser
+// signal. Inner whitespace within lines is preserved to avoid corrupting
+// code blocks and structured content. The original Content field is left
+// intact — only the embedding representation is normalized.
+func normalizeEmbeddingBody(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+	// Collapse 3+ consecutive newlines (with optional horizontal whitespace
+	// between them) to exactly 2 newlines (one paragraph break). This is the
+	// biggest source of wasted embedding tokens in PDF-extracted documents.
+	return collapseExcessiveBlanks(s)
+}
+
+// collapseExcessiveBlanks replaces runs of 3+ newlines (with optional
+// spaces/tabs between them) with exactly 2 newlines. A single paragraph
+// break (\n\n) is semantically meaningful; anything beyond that wastes
+// embedding tokens without adding signal.
+func collapseExcessiveBlanks(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	newlines := 0
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch == '\n' {
+			newlines++
+			if newlines <= 2 {
+				b.WriteByte(ch)
+			}
+		} else if ch == '\r' {
+			// Skip \r; the \n that follows (or preceded) handles the break.
+			continue
+		} else if ch == ' ' || ch == '\t' {
+			// Horizontal whitespace between newlines is absorbed when
+			// newlines >= 2 (it's just inter-paragraph spacing).
+			if newlines < 2 {
+				b.WriteByte(ch)
+			}
+		} else {
+			newlines = 0
+			b.WriteByte(ch)
+		}
+	}
+	return b.String()
 }
 
 // AssignChunkSeqIDs assigns sequential SeqIDs to a batch of chunks that have SeqID == 0.

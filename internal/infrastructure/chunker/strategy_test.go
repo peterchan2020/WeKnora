@@ -49,14 +49,10 @@ func TestSplit_AutoStrategy_PicksHeadingForMarkdownDoc(t *testing.T) {
 }
 
 func TestSplit_HeadingStrategyKeepsDistinctTopLevelHeadings(t *testing.T) {
-	doc := `# Intro
-short intro.
-
-# Usage
-short usage.
-
-# FAQ
-short faq.`
+	// Each section body must exceed coalesceTinyChunks' merge target
+	// (max(chunkSize/3, 200) = 200) so sections are NOT merged into one chunk.
+	body := strings.Repeat("This is a paragraph with enough content to avoid tiny-chunk coalescing. ", 3)
+	doc := "# Intro\n" + body + "\n\n# Usage\n" + body + "\n\n# FAQ\n" + body
 	cfg := SplitterConfig{ChunkSize: 500, ChunkOverlap: 0, Strategy: StrategyHeading}
 	chunks := Split(doc, cfg)
 	if len(chunks) != 3 {

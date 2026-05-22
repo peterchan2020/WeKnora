@@ -163,7 +163,7 @@ func splitByHeadingsStructured(text string, cfg SplitterConfig, profile *DocProf
 		// The heading will be absorbed by coalesceOrphanHeadings into
 		// the adjacent section instead, preventing isolated heading-only
 		// tiny chunks.
-		const minSectionBody = 50
+		const minSectionBody = 15
 		if cfg.ChunkSize < 500 {
 			// Check how much non-heading content this section has.
 			nonHeadingLen := 0

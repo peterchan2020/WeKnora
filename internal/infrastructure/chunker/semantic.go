@@ -118,7 +118,7 @@ func SplitSemantic(ctx context.Context, text string, cfg SplitterConfig, embedde
 		return SplitText(text, cfg), nil
 	}
 
-	threshold := percentile(distances, cfg.SemanticBreakpointPercentile)
+	threshold := adaptiveBreakpointThreshold(distances, cfg.SemanticBreakpointPercentile)
 	breakAfter := make(map[int]bool)
 	for i, d := range distances {
 		if d > threshold {
@@ -537,4 +537,51 @@ func percentile(values []float64, pct int) float64 {
 	}
 	frac := rank - float64(lo)
 	return sorted[lo]*(1-frac) + sorted[hi]*frac
+}
+
+// adaptiveBreakpointThreshold computes a semantic breakpoint threshold that
+// adapts to the distance distribution of the document. It takes the higher of
+// two candidates:
+//
+//  1. The configured percentile of observed distances (e.g. P75).
+//  2. mean + stddev, which corresponds to ~84th percentile for a normal
+//     distribution but naturally scales with the actual spread of distances.
+//
+// For uniform documents (all distances near the mean, low coefficient of
+// variation), mean+stddev prevents over-splitting at noise level. For bimodal
+// distributions (high CV, clear topic shifts), the percentile is more reliable
+// so we skip the adaptive adjustment.
+//
+// With fewer than 5 distance samples, falls back to the percentile alone
+// because stddev is unreliable on such small populations.
+func adaptiveBreakpointThreshold(distances []float64, basePercentile int) float64 {
+	pctl := percentile(distances, basePercentile)
+	if len(distances) < 5 {
+		return pctl
+	}
+
+	var sum, sumSq float64
+	for _, d := range distances {
+		sum += d
+		sumSq += d * d
+	}
+	n := float64(len(distances))
+	mean := sum / n
+	variance := (sumSq / n) - (mean * mean)
+	if variance < 0 {
+		variance = 0 // guard against floating-point rounding
+	}
+	stddev := math.Sqrt(variance)
+
+	// Only apply adaptive threshold when coefficient of variation is low
+	// (< 1.0), meaning the distances are relatively uniform. For bimodal
+	// distributions (high CV, e.g. [0, 0, 1.0]), the percentile is more
+	// appropriate because mean+stddev can overshoot the true breakpoint.
+	if mean > 0 && stddev/mean < 1.0 {
+		adaptive := mean + stddev
+		if adaptive > pctl {
+			return adaptive
+		}
+	}
+	return pctl
 }

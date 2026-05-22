@@ -363,6 +363,40 @@ func mergeContextHeaders(parent, child string) string {
 	return parent + "\n" + strings.Join(childLines, "\n")
 }
 
+// extractFirstSentenceForContext extracts the first non-empty sentence from
+// chunk content for use as a disambiguating sub-context in ContextHeader.
+// This gives chunks from heading-less documents a unique identifier beyond
+// just the document title, improving retrieval discrimination.
+//
+// Returns up to 120 runes of the first sentence. Returns "" if no usable
+// sentence is found (empty content, heading-only content, etc.).
+func extractFirstSentenceForContext(content string) string {
+	const maxLen = 120
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+
+	// Skip leading heading lines (# or numbered sections) — those are already
+	// captured in the document title or ContextHeader.
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Found the first non-heading content line — use it.
+		runes := []rune(line)
+		if len(runes) > maxLen {
+			return string(runes[:maxLen]) + "…"
+		}
+		return string(runes)
+	}
+	return ""
+}
+
 func parsedChunksFromChunks(chunks []chunker.Chunk) []types.ParsedChunk {
 	parsed := make([]types.ParsedChunk, len(chunks))
 	for i, c := range chunks {
@@ -666,6 +700,12 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		// heading breadcrumbs (Tier-2/Tier-3 never set ContextHeader). This ensures
 		// every chunk carries at least the document title for semantic positioning,
 		// which significantly improves source hit rate for PDF-heavy knowledge bases.
+		//
+		// When no heading breadcrumb exists, we also append the first sentence of
+		// the chunk content as a sub-context. This gives each chunk a unique
+		// ContextHeader instead of all chunks sharing the same bare document
+		// title, which significantly improves retrieval discrimination for
+		// documents without heading structure (PDFs, plain text).
 		docTitle := strings.TrimSpace(knowledge.Title)
 		// Wire up ParentChunkID for child chunks and collect child IDs on parents
 		parentChildMap := make(map[int][]string) // parentIndex → child IDs
@@ -678,6 +718,9 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		contextHeader := chunkData.ContextHeader
 		if contextHeader == "" && docTitle != "" {
 			contextHeader = "# " + docTitle
+			if firstSentence := extractFirstSentenceForContext(chunkData.Content); firstSentence != "" {
+				contextHeader += "\n> " + firstSentence
+			}
 		}
 		textChunk := &types.Chunk{
 			ID:              uuid.New().String(),

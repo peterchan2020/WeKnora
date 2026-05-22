@@ -48,15 +48,46 @@ type Chunk struct {
 //
 // Content is returned verbatim from the source document (the End-Start
 // rune-count invariant requires that), but for embedding we trim the
-// surrounding whitespace so leading/trailing newlines from boundary slices
-// don't dilute the embedded vector or waste tokens. Inner whitespace is
-// preserved.
+// surrounding whitespace and collapse runs of 3+ consecutive newlines to
+// a single paragraph break. This improves embedding semantic density —
+// PDF-extracted documents frequently contain excessive blank lines that
+// waste tokens without adding retrieval signal.
 func (c Chunk) EmbeddingContent() string {
 	body := strings.TrimSpace(c.Content)
+	body = collapseExcessiveBlanks(body)
 	if c.ContextHeader == "" {
 		return body
 	}
 	return c.ContextHeader + "\n\n" + body
+}
+
+// collapseExcessiveBlanks replaces runs of 3+ newlines (with optional
+// horizontal whitespace between them) with exactly 2 newlines. A single
+// paragraph break (\n\n) is semantically meaningful; anything beyond that
+// wastes embedding tokens without adding signal.
+func collapseExcessiveBlanks(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	newlines := 0
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch == '\n' {
+			newlines++
+			if newlines <= 2 {
+				b.WriteByte(ch)
+			}
+		} else if ch == '\r' {
+			continue
+		} else if ch == ' ' || ch == '\t' {
+			if newlines < 2 {
+				b.WriteByte(ch)
+			}
+		} else {
+			newlines = 0
+			b.WriteByte(ch)
+		}
+	}
+	return b.String()
 }
 
 // ImageRef is an image reference found within a chunk's content.
@@ -224,6 +255,11 @@ func mergeCrossesProtectedSpan(mergeStart, mergeEnd int, spans []span) bool {
 	for _, s := range spans {
 		if s.start >= mergeEnd {
 			break
+		}
+		// Span fully contains merge range → not a crossing (merge is inside
+		// the protected region, no boundary is split).
+		if s.start <= mergeStart && s.end >= mergeEnd {
+			continue
 		}
 		// Span starts inside merge range but ends after it → split.
 		if s.start >= mergeStart && s.end > mergeEnd {

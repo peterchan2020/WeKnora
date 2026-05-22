@@ -234,8 +234,13 @@ func SelectStrategy(p *DocProfile) []StrategyTier {
 		chain = append(chain, TierHeuristic)
 	}
 
-	// Tier 1 candidate: Markdown heading-aware
-	if p.MdHeadingTotal >= 3 && p.HeadingDensity() > 0.005 && p.DominantHeadingLevel() > 0 {
+	// Tier 1 candidate: Markdown heading-aware.
+	// Accept documents with as few as 1 heading — many valuable technical
+	// documents have only 1-2 headings (short guides, product specs) and still
+	// benefit from heading-aware splitting. The density floor (0.002 ≈ 1
+	// heading per 500 lines) filters out noise matches in very long documents
+	// where a stray # is unlikely to indicate real structure.
+	if p.MdHeadingTotal >= 1 && p.HeadingDensity() > 0.002 && p.DominantHeadingLevel() > 0 {
 		chain = append(chain, TierHeading)
 	}
 

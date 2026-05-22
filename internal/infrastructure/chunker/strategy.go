@@ -18,10 +18,13 @@ import (
 const (
 	StrategyAuto           = "auto"
 	StrategyStructureAware = "structure_aware"
-	StrategyHeading        = "heading"
-	StrategyHeuristic      = "heuristic"
-	StrategyRecursive      = "recursive"
-	StrategyLegacy         = "legacy"
+	// StrategySemantic is a deprecated alias kept for backwards compatibility
+	// with stored ChunkingConfig rows that used strategy="semantic".
+	StrategySemantic  = "semantic"
+	StrategyHeading   = "heading"
+	StrategyHeuristic = "heuristic"
+	StrategyRecursive = "recursive"
+	StrategyLegacy    = "legacy"
 )
 
 // Split chunks text using the strategy configured in cfg. When cfg.Strategy
@@ -232,6 +235,10 @@ func resolveChainWithProfile(text string, cfg SplitterConfig) ([]StrategyTier, *
 		return []StrategyTier{TierHeading, TierLegacy}, nil
 	case StrategyHeuristic:
 		return []StrategyTier{TierHeuristic, TierLegacy}, nil
+	case StrategySemantic:
+		// Backward compatibility for stored configs: standalone semantic is
+		// now structure-aware with heuristic tier.
+		return []StrategyTier{TierHeuristic, TierLegacy}, nil
 	case StrategyRecursive:
 		// "recursive" is a public-API alias for "legacy": both invoke
 		// SplitText. Kept for backwards compatibility with stored configs.
@@ -316,7 +323,11 @@ func ensureDefaults(cfg SplitterConfig) SplitterConfig {
 	if cfg.ChunkOverlap > cfg.ChunkSize/2 && cfg.ChunkSize > 0 {
 		cfg.ChunkOverlap = cfg.ChunkSize / 2
 	}
-	if cfg.SemanticBufferSize < 0 {
+	// Default SemanticBufferSize to 1 (LlamaIndex default) when unset. Zero-value
+	// from SplitterConfig means the caller did not specify a buffer size, which
+	// should NOT be interpreted as buffer=0 (single-sentence windows) because
+	// that degrades semantic distance signal-to-noise for typical documents.
+	if cfg.SemanticBufferSize <= 0 {
 		cfg.SemanticBufferSize = 1
 	}
 	if cfg.SemanticBreakpointPercentile <= 0 {

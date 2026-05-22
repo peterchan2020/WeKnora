@@ -70,6 +70,12 @@ func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile,
 	if len(protSpans) > 0 {
 		bounds = dropBoundsInsideSpans(bounds, protSpans)
 	}
+	// Also drop boundaries inside list blocks (2+ items). Lists should be
+	// kept intact so the second half is not orphaned from its list context.
+	listSpans := listBlockSpansRune(text)
+	if len(listSpans) > 0 {
+		bounds = dropBoundsInsideSpans(bounds, listSpans)
+	}
 	if len(bounds) == 0 {
 		if shouldPreserveParagraphBlocks(cfg) {
 			if chunks := splitByParagraphBlocks(text, cfg); len(chunks) > 1 {
@@ -144,7 +150,7 @@ func splitByHeuristicsStructured(text string, cfg SplitterConfig, _ *DocProfile,
 
 func shouldPreserveParagraphBlocks(cfg SplitterConfig) bool {
 	switch strings.ToLower(strings.TrimSpace(cfg.Strategy)) {
-	case StrategyHeuristic, StrategyStructureAware:
+	case StrategyHeuristic, StrategySemantic, StrategyStructureAware:
 		return true
 	default:
 		return false
@@ -156,17 +162,12 @@ func splitByParagraphBlocks(text string, cfg SplitterConfig) []Chunk {
 		return nil
 	}
 	runes := []rune(text)
-	byteSpans := protectedSpans(text)
-	runeSpans := protectedSpansRune(text, byteSpans)
 	var out []Chunk
 	seq := 0
 	blockStart := 0
 	for i := 0; i < len(runes); i++ {
 		end, ok := paragraphBreakEnd(runes, i)
 		if !ok {
-			continue
-		}
-		if insideAnySpan(end, runeSpans) {
 			continue
 		}
 		out = appendParagraphBlock(out, runes, blockStart, end, cfg, &seq)
@@ -352,6 +353,105 @@ boundLoop:
 		out = append(out, b)
 	}
 	return out
+}
+
+// listBlockSpansRune returns rune-offset spans for each contiguous list block
+// in text. A list block is a sequence of lines where each non-blank line
+// starts with a Markdown list marker (-, *, +, or numbered "1."). Blocks of
+// 2+ items are returned as protected spans so that the heuristic splitter
+// does not place a chunk boundary in the middle of a list — splitting there
+// would orphan the second half from its list context.
+//
+// The returned spans are sorted by start offset and do not overlap.
+func listBlockSpansRune(text string) []span {
+	lines := strings.Split(text, "\n")
+	if len(lines) < 2 {
+		return nil
+	}
+
+	// isListLine checks whether a line starts with a Markdown list marker:
+	// unordered (-, *, +) or ordered (digits followed by . or )).
+	isListLine := func(line string) bool {
+		trimmed := strings.TrimLeft(line, " \t")
+		if len(trimmed) < 2 {
+			return false
+		}
+		// Unordered: "- item", "* item", "+ item"
+		if (trimmed[0] == '-' || trimmed[0] == '*' || trimmed[0] == '+') &&
+			(trimmed[1] == ' ' || trimmed[1] == '\t') {
+			return true
+		}
+		// Ordered: "1. item", "23) item"
+		j := 0
+		for j < len(trimmed) && trimmed[j] >= '0' && trimmed[j] <= '9' {
+			j++
+		}
+		if j > 0 && j < len(trimmed) && (trimmed[j] == '.' || trimmed[j] == ')') &&
+			j+1 < len(trimmed) && (trimmed[j+1] == ' ' || trimmed[j+1] == '\t') {
+			return true
+		}
+		return false
+	}
+
+	// Compute rune offset for each line start.
+	runePos := 0
+	lineStarts := make([]int, len(lines))
+	for i, line := range lines {
+		lineStarts[i] = runePos
+		runePos += utf8.RuneCountInString(line)
+		if i < len(lines)-1 {
+			runePos++ // \n
+		}
+	}
+
+	var spans []span
+	blockStart := -1
+	blockItems := 0
+
+	flushBlock := func(endLineIdx int) {
+		if blockStart >= 0 && blockItems >= 2 {
+			start := lineStarts[blockStart]
+			end := lineStarts[endLineIdx] + utf8.RuneCountInString(lines[endLineIdx])
+			if endLineIdx < len(lines)-1 {
+				end++ // include trailing \n
+			}
+			spans = append(spans, span{start: start, end: end})
+		}
+		blockStart = -1
+		blockItems = 0
+	}
+
+	for i, line := range lines {
+		if isListLine(line) {
+			if blockStart < 0 {
+				blockStart = i
+			}
+			blockItems++
+		} else if strings.TrimSpace(line) == "" {
+			// Blank line: tolerate if the next non-blank line continues the list.
+			if blockStart >= 0 {
+				nextIsList := false
+				for j := i + 1; j < len(lines); j++ {
+					if strings.TrimSpace(lines[j]) == "" {
+						continue
+					}
+					nextIsList = isListLine(lines[j])
+					break
+				}
+				if !nextIsList {
+					flushBlock(i - 1)
+				}
+			}
+		} else {
+			if blockStart >= 0 {
+				flushBlock(i - 1)
+			}
+		}
+	}
+	if blockStart >= 0 {
+		flushBlock(len(lines) - 1)
+	}
+	return spans
 }
 
 // allRuneIndices returns every rune offset where needle starts in text.
@@ -545,11 +645,23 @@ func applyOverlapAligned(runes []rune, curEnd, overlap int, bounds []boundary) i
 		windowStart = 0
 	}
 
-	// Prefer a semantic boundary strictly inside the window.
+	// Prefer a semantic boundary closest to the target overlap point.
+	// Picking the latest boundary (closest to curEnd) can result in a
+	// much smaller actual overlap than configured. Instead, find the
+	// boundary whose position is nearest to `target` (curEnd - overlap),
+	// so the actual overlap is as close to the configured value as possible.
 	bestBound := -1
+	bestDist := -1
 	for _, b := range bounds {
-		if b.runeStart >= windowStart && b.runeStart < curEnd && b.runeStart > bestBound {
-			bestBound = b.runeStart
+		if b.runeStart >= windowStart && b.runeStart < curEnd {
+			dist := b.runeStart - target
+			if dist < 0 {
+				dist = -dist
+			}
+			if bestBound < 0 || dist < bestDist {
+				bestBound = b.runeStart
+				bestDist = dist
+			}
 		}
 	}
 	if bestBound >= 0 {

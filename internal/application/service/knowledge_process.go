@@ -1917,6 +1917,22 @@ func (s *knowledgeService) updateChunkVector(ctx context.Context, kbID string, c
 		return err
 	}
 
+	// Resolve document title so the update path produces the same embedding
+	// content as the initial indexing path (titlePrefix + EmbeddingContent).
+	// Without this, updated chunks lose their title and ContextHeader context,
+	// causing retrieval quality to silently degrade over time.
+	titlePrefix := ""
+	if len(chunks) > 0 && chunks[0].KnowledgeID != "" {
+		tenantID := types.MustTenantIDFromContext(ctx)
+		if knowledge, err := s.repo.GetKnowledgeByID(ctx, tenantID, chunks[0].KnowledgeID); err == nil {
+			if t := strings.TrimSpace(knowledge.Title); t != "" {
+				titlePrefix = t + "\n"
+			}
+		} else {
+			logger.Warnf(ctx, "updateChunkVector: failed to resolve knowledge title for %s: %v", chunks[0].KnowledgeID, err)
+		}
+	}
+
 	// Initialize composite retrieve engine from tenant configuration
 	indexInfo := make([]*types.IndexInfo, 0, len(chunks))
 	ids := make([]string, 0, len(chunks))
@@ -1926,7 +1942,7 @@ func (s *knowledgeService) updateChunkVector(ctx context.Context, kbID string, c
 			continue
 		}
 		indexInfo = append(indexInfo, &types.IndexInfo{
-			Content:         chunk.Content,
+			Content:         titlePrefix + chunk.EmbeddingContent(),
 			SourceID:        chunk.ID,
 			SourceType:      types.ChunkSourceType,
 			ChunkID:         chunk.ID,

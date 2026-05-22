@@ -99,13 +99,9 @@ func fuseWithRRF(ctx context.Context, vectorResults, keywordResults []*types.Ind
 		}
 	}
 
-	// Collect all unique chunks — prefer vector result's metadata for each chunk.
-	// Track original vector similarity separately from RRF score so we can use
-	// it as a tiebreaker for chunks with identical RRF ranks.
+	// Collect all unique chunks — prefer vector result's metadata for each chunk
 	chunkInfoMap := make(map[string]*types.IndexWithScore)
-	vectorOrigScores := make(map[string]float64, len(vectorResults))
 	for _, r := range vectorResults {
-		vectorOrigScores[r.ChunkID] = r.Score
 		if existing, exists := chunkInfoMap[r.ChunkID]; !exists || r.Score > existing.Score {
 			chunkInfoMap[r.ChunkID] = r
 		}
@@ -116,12 +112,7 @@ func fuseWithRRF(ctx context.Context, vectorResults, keywordResults []*types.Ind
 		}
 	}
 
-	// Compute weighted RRF scores and assign to each chunk.
-	// RRF produces discrete rank-based scores — multiple chunks can share the
-	// same RRF score (e.g. both appear only in vector results at different
-	// ranks). Use the original vector similarity (when available) as a small
-	// tiebreaker to preserve the fine-grained semantic ordering that RRF's
-	// rank discretization would otherwise discard.
+	// Compute weighted RRF scores and assign to each chunk
 	result := make([]*types.IndexWithScore, 0, len(chunkInfoMap))
 	for chunkID, info := range chunkInfoMap {
 		rrfScore := 0.0
@@ -131,11 +122,7 @@ func fuseWithRRF(ctx context.Context, vectorResults, keywordResults []*types.Ind
 		if rank, ok := keywordRanks[chunkID]; ok {
 			rrfScore += keywordWeight / float64(rrfK+rank)
 		}
-		if vScore, ok := vectorOrigScores[chunkID]; ok {
-			info.Score = rrfScore + 0.01*vScore
-		} else {
-			info.Score = rrfScore
-		}
+		info.Score = rrfScore
 		result = append(result, info)
 	}
 	slices.SortFunc(result, sortByScoreDesc)
